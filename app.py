@@ -429,10 +429,23 @@ def generate_pdf():
         if not body:
             return jsonify({"error": "No JSON body received"}), 400
 
-        raw_json      = body.get('report_json', '')
-        brand_name    = body.get('brand_name', 'Brand')
+        brand_name     = body.get('brand_name', 'Brand')
         brand_category = body.get('brand_category', 'D2C Brand')
-        brand_market  = body.get('brand_market', 'India')
+        brand_market   = body.get('brand_market', 'India')
+
+        # Accept either full Claude response object or pre-extracted text
+        raw_json = ''
+        claude_response = body.get('claude_response', {})
+        if claude_response:
+            if isinstance(claude_response, dict):
+                content = claude_response.get('content', [])
+                if content and len(content) > 0:
+                    raw_json = content[0].get('text', '')
+            elif isinstance(claude_response, str):
+                raw_json = claude_response
+        
+        if not raw_json:
+            raw_json = body.get('report_json', '')
 
         raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
         raw_json = re.sub(r'^```\s*', '', raw_json)
