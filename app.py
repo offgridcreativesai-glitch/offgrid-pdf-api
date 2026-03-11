@@ -2,6 +2,11 @@ import json
 import re
 import os
 import tempfile
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from flask import Flask, request, send_file, jsonify
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
@@ -422,6 +427,28 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     doc.build(story)
 
 
+GMAIL_ADDRESS = "offgridcreativesai@gmail.com"
+GMAIL_APP_PASSWORD = "zxxoahpudmtyteeh"
+
+def send_email_with_pdf(to_email, brand_name, pdf_path):
+    filename = f"{brand_name.replace(' ', '_')}_AdIntelligenceReport.pdf"
+    msg = MIMEMultipart()
+    msg['From'] = GMAIL_ADDRESS
+    msg['To'] = to_email
+    msg['Subject'] = f"Ad Intelligence Report — {brand_name}"
+    body = f"Please find attached the Ad Intelligence Report for {brand_name}.\n\nPrepared by OffGrid Creatives AI."
+    msg.attach(MIMEText(body, 'plain'))
+    with open(pdf_path, 'rb') as f:
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
+    part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+    msg.attach(part)
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
+
+
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf():
     try:
@@ -432,8 +459,8 @@ def generate_pdf():
         brand_name     = body.get('brand_name', 'Brand')
         brand_category = body.get('brand_category', 'D2C Brand')
         brand_market   = body.get('brand_market', 'India')
+        to_email       = body.get('to_email', GMAIL_ADDRESS)
 
-        # Accept either full Claude response object or pre-extracted text
         raw_json = ''
         claude_response = body.get('claude_response', {})
         if claude_response:
@@ -443,9 +470,9 @@ def generate_pdf():
                     raw_json = content[0].get('text', '')
             elif isinstance(claude_response, str):
                 raw_json = claude_response
-        
+
         if not raw_json:
-            raw_json = body.get('report_json', '') or body.get('Report_json', '')
+            raw_json = body.get('report_json', '')
 
         raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
         raw_json = re.sub(r'^```\s*', '', raw_json)
@@ -457,10 +484,10 @@ def generate_pdf():
             output_path = f.name
 
         build_pdf(report_data, brand_name, brand_category, brand_market, output_path)
+        send_email_with_pdf(to_email, brand_name, output_path)
+        os.unlink(output_path)
 
-        filename = f"{brand_name.replace(' ', '_')}_AdIntelligenceReport.pdf"
-        return send_file(output_path, mimetype='application/pdf',
-                         as_attachment=True, download_name=filename)
+        return jsonify({"status": "success", "message": f"Report sent to {to_email}"}), 200
 
     except json.JSONDecodeError as e:
         return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
