@@ -3,6 +3,7 @@ import re
 import os
 import tempfile
 import smtplib
+import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -449,13 +450,8 @@ def send_email_with_pdf(to_email, brand_name, pdf_path):
         server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
 
 
-@app.route('/generate-pdf', methods=['POST'])
-def generate_pdf():
+def process_report(body):
     try:
-        body = request.get_json(force=True)
-        if not body:
-            return jsonify({"error": "No JSON body received"}), 400
-
         brand_name     = body.get('brand_name', 'Brand')
         brand_category = body.get('brand_category', 'D2C Brand')
         brand_market   = body.get('brand_market', 'India')
@@ -465,18 +461,19 @@ def generate_pdf():
         claude_response = body.get('claude_response', {})
         if claude_response:
             if isinstance(claude_response, dict):
-                content = claude_response.get('content', [])
-                if content and len(content) > 0:
-                    raw_json = content[0].get('text', '')
+                content_list = claude_response.get('content', [])
+                if content_list and len(content_list) > 0:
+                    raw_json = content_list[0].get('text', '')
             elif isinstance(claude_response, str):
                 raw_json = claude_response
 
         if not raw_json:
             raw_json = body.get('report_json', '') or body.get('Report_json', '')
-            
-        raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
-        raw_json = re.sub(r'^```\s*', '', raw_json)
-        raw_json = re.sub(r'\s*```$', '', raw_json)
+
+        import re as _re
+        raw_json = _re.sub(r'^```json\s*', '', raw_json.strip())
+        raw_json = _re.sub(r'^```\s*', '', raw_json)
+        raw_json = _re.sub(r'\s*```$', '', raw_json)
 
         report_data = json.loads(raw_json)
 
@@ -486,11 +483,21 @@ def generate_pdf():
         build_pdf(report_data, brand_name, brand_category, brand_market, output_path)
         send_email_with_pdf(to_email, brand_name, output_path)
         os.unlink(output_path)
+        print(f"Report sent successfully to {to_email}")
+    except Exception as e:
+        print(f"Background processing error: {str(e)}")
 
-        return jsonify({"status": "success", "message": f"Report sent to {to_email}"}), 200
 
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
+@app.route('/generate-pdf', methods=['POST'])
+def generate_pdf():
+    try:
+        body = request.get_json(force=True)
+        if not body:
+            return jsonify({"error": "No JSON body received"}), 400
+        thread = threading.Thread(target=process_report, args=(body,))
+        thread.daemon = True
+        thread.start()
+        return jsonify({"status": "processing", "message": "Report generation started. PDF will be emailed shortly."}), 202
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
