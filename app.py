@@ -2,12 +2,8 @@ import json
 import re
 import os
 import tempfile
-import smtplib
+import base64
 import threading
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 from flask import Flask, request, send_file, jsonify
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
@@ -431,31 +427,17 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
 GMAIL_ADDRESS = "offgridcreativesai@gmail.com"
 GMAIL_APP_PASSWORD = "zxxoahpudmtyteeh"
 
-def send_email_with_pdf(to_email, brand_name, pdf_path):
-    filename = f"{brand_name.replace(' ', '_')}_AdIntelligenceReport.pdf"
-    msg = MIMEMultipart()
-    msg['From'] = GMAIL_ADDRESS
-    msg['To'] = to_email
-    msg['Subject'] = f"Ad Intelligence Report — {brand_name}"
-    body = f"Please find attached the Ad Intelligence Report for {brand_name}.\n\nPrepared by OffGrid Creatives AI."
-    msg.attach(MIMEText(body, 'plain'))
-    with open(pdf_path, 'rb') as f:
-        part = MIMEBase('application', 'octet-stream')
-        part.set_payload(f.read())
-    encoders.encode_base64(part)
-    part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-    msg.attach(part)
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
 
-
-def process_report(body):
+@app.route('/generate-pdf', methods=['POST'])
+def generate_pdf():
     try:
+        body = request.get_json(force=True)
+        if not body:
+            return jsonify({"error": "No JSON body received"}), 400
+
         brand_name     = body.get('brand_name', 'Brand')
         brand_category = body.get('brand_category', 'D2C Brand')
         brand_market   = body.get('brand_market', 'India')
-        to_email       = body.get('to_email', GMAIL_ADDRESS)
 
         raw_json = ''
         claude_response = body.get('claude_response', {})
@@ -470,10 +452,9 @@ def process_report(body):
         if not raw_json:
             raw_json = body.get('report_json', '') or body.get('Report_json', '')
 
-        import re as _re
-        raw_json = _re.sub(r'^```json\s*', '', raw_json.strip())
-        raw_json = _re.sub(r'^```\s*', '', raw_json)
-        raw_json = _re.sub(r'\s*```$', '', raw_json)
+        raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
+        raw_json = re.sub(r'^```\s*', '', raw_json)
+        raw_json = re.sub(r'\s*```$', '', raw_json)
 
         report_data = json.loads(raw_json)
 
@@ -481,23 +462,21 @@ def process_report(body):
             output_path = f.name
 
         build_pdf(report_data, brand_name, brand_category, brand_market, output_path)
-        send_email_with_pdf(to_email, brand_name, output_path)
+
+        with open(output_path, 'rb') as f:
+            pdf_base64 = base64.b64encode(f.read()).decode('utf-8')
+
         os.unlink(output_path)
-        print(f"Report sent successfully to {to_email}")
-    except Exception as e:
-        print(f"Background processing error: {str(e)}")
 
+        filename = f"{brand_name.replace(' ', '_')}_AdIntelligenceReport.pdf"
+        return jsonify({
+            "status": "success",
+            "filename": filename,
+            "pdf_base64": pdf_base64
+        }), 200
 
-@app.route('/generate-pdf', methods=['POST'])
-def generate_pdf():
-    try:
-        body = request.get_json(force=True)
-        if not body:
-            return jsonify({"error": "No JSON body received"}), 400
-        thread = threading.Thread(target=process_report, args=(body,))
-        thread.daemon = True
-        thread.start()
-        return jsonify({"status": "processing", "message": "Report generation started. PDF will be emailed shortly."}), 202
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
