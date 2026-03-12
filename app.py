@@ -473,7 +473,16 @@ def generate_pdf():
         raw_json = re.sub(r'^```\s*', '', raw_json)
         raw_json = re.sub(r'\s*```$', '', raw_json)
 
-        report_data = json.loads(raw_json)
+        # Attempt JSON repair for common LLM output issues
+        try:
+            report_data = json.loads(raw_json)
+        except json.JSONDecodeError:
+            import re as _re2
+            # Find outermost JSON object
+            match = _re2.search(r'\{.*\}', raw_json, _re2.DOTALL)
+            if match:
+                raw_json = match.group(0)
+            report_data = json.loads(raw_json)
 
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
             output_path = f.name
