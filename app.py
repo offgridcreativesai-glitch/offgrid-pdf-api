@@ -452,6 +452,23 @@ def generate_pdf():
         if not raw_json:
             raw_json = body.get('report_json', '') or body.get('Report_json', '')
 
+        # Handle Report_json as dict (Make.com parsed object) or string
+        if isinstance(raw_json, dict):
+            _clist = raw_json.get('content', [])
+            if _clist:
+                raw_json = _clist[0].get('text', '')
+            else:
+                raw_json = str(raw_json)
+        elif isinstance(raw_json, str) and raw_json.strip().startswith('{'):
+            try:
+                _parsed = json.loads(raw_json)
+                if isinstance(_parsed, dict) and 'content' in _parsed:
+                    _clist = _parsed.get('content', [])
+                    if _clist:
+                        raw_json = _clist[0].get('text', raw_json)
+            except Exception:
+                pass
+
         raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
         raw_json = re.sub(r'^```\s*', '', raw_json)
         raw_json = re.sub(r'\s*```$', '', raw_json)
