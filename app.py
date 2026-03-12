@@ -440,34 +440,41 @@ def generate_pdf():
         brand_market   = body.get('brand_market', 'India')
 
         raw_json = ''
-        claude_response = body.get('claude_response', {})
+
+        def extract_text_from_claude(obj):
+            """Safely extract report text from Claude API response in any form."""
+            original = obj
+            if isinstance(obj, str):
+                try:
+                    obj = json.loads(obj)
+                except Exception:
+                    return original  # Already plain text/JSON string
+            if isinstance(obj, dict):
+                if 'content' in obj:
+                    content_list = obj.get('content', [])
+                    if content_list:
+                        item = content_list[0]
+                        if isinstance(item, dict):
+                            return item.get('text', '')
+                        elif isinstance(item, str):
+                            return item
+                else:
+                    # Dict without content key = already the report JSON
+                    return json.dumps(obj)
+            return ''
+
+        # Try claude_response key first
+        claude_response = body.get('claude_response')
         if claude_response:
-            if isinstance(claude_response, dict):
-                content_list = claude_response.get('content', [])
-                if content_list and len(content_list) > 0:
-                    raw_json = content_list[0].get('text', '')
-            elif isinstance(claude_response, str):
-                raw_json = claude_response
+            raw_json = extract_text_from_claude(claude_response)
 
+        # Fall back to Report_json / report_json
         if not raw_json:
-            raw_json = body.get('report_json', '') or body.get('Report_json', '')
-
-        # Handle Report_json as dict (Make.com parsed object) or string
-        if isinstance(raw_json, dict):
-            _clist = raw_json.get('content', [])
-            if _clist:
-                raw_json = _clist[0].get('text', '')
-            else:
-                raw_json = str(raw_json)
-        elif isinstance(raw_json, str) and raw_json.strip().startswith('{'):
-            try:
-                _parsed = json.loads(raw_json)
-                if isinstance(_parsed, dict) and 'content' in _parsed:
-                    _clist = _parsed.get('content', [])
-                    if _clist:
-                        raw_json = _clist[0].get('text', raw_json)
-            except Exception:
-                pass
+            raw_json = body.get('report_json') or body.get('Report_json') or ''
+            if raw_json:
+                extracted = extract_text_from_claude(raw_json)
+                if extracted:
+                    raw_json = extracted
 
         raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
         raw_json = re.sub(r'^```\s*', '', raw_json)
