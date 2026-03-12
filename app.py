@@ -108,6 +108,11 @@ def risk_box(title, content, color=RED_ALERT):
         ('LEFTPADDING',(0,0),(-1,-1),8)]))
     return t
 
+def safe_dict(val):
+    if isinstance(val, dict):
+        return val
+    return {}
+
 def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     W = 170*mm
     today = datetime.now().strftime("%B %d, %Y")
@@ -134,7 +139,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     story += [Spacer(1,25*mm), ct, PageBreak()]
 
     # S1 KEYWORD UNIVERSE
-    kw = data.get('keyword_universe', {})
+    kw = safe_dict(data.get('keyword_universe'))
     story += sec_header(1, "Keyword Universe")
     for key, label in [('search_intent_keywords','SEARCH INTENT'),('emotional_trigger_keywords','EMOTIONAL TRIGGERS'),
         ('culture_keywords','CULTURE'),('style_keywords','STYLE'),('seasonal_keywords','SEASONAL')]:
@@ -142,7 +147,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         if items: story += [tag(label), chip_row(items, 3), Spacer(1,3*mm)]
 
     # S2 MARKET SATURATION
-    ms = data.get('market_saturation', {})
+    ms = safe_dict(data.get('market_saturation'))
     story += sec_header(2, "Market Saturation")
     for key, label in [('category_maturity','CATEGORY MATURITY'),('content_fatigue','CONTENT FATIGUE'),
         ('pricing_pressure','PRICING PRESSURE'),('differentiation_gaps','DIFFERENTIATION GAPS'),
@@ -151,7 +156,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
 
     # S3 MARKET BENCHMARKS
-    mb = data.get('market_benchmarks', {})
+    mb = safe_dict(data.get('market_benchmarks'))
     story += sec_header(3, "Market Benchmarks")
     bench_rows = [("CPM RANGE", mb.get('typical_cpm_range','')),("CTR RANGE", mb.get('typical_ctr_range','')),
         ("CVR RANGE", mb.get('typical_cvr_range','')),("CAC RANGE", mb.get('typical_cac_range','')),
@@ -160,7 +165,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     story += [kv_table(bench_rows), Spacer(1,4*mm)]
 
     # S4 COMPETITIVE AD INTELLIGENCE
-    ci = data.get('competitive_ad_intelligence', {})
+    ci = safe_dict(data.get('competitive_ad_intelligence'))
     story += sec_header(4, "Competitive Ad Intelligence")
     for comp_name, comp_data in ci.items():
         if not isinstance(comp_data, dict): continue
@@ -175,7 +180,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         story += [kv_table(rows, 42*mm), Spacer(1,4*mm)]
 
     # S5 HOOK INTELLIGENCE
-    hi = data.get('hook_intelligence', {})
+    hi = safe_dict(data.get('hook_intelligence'))
     story += sec_header(5, "Hook Intelligence")
     for key, label in [('scarcity_hooks','SCARCITY HOOKS'),('social_proof_hooks','SOCIAL PROOF HOOKS'),
         ('problem_agitation_hooks','PROBLEM AGITATION HOOKS'),('curiosity_gap_hooks','CURIOSITY GAP HOOKS'),
@@ -185,7 +190,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
             story.append(tag(label))
             for h in hooks: story += [hook_box(h), Spacer(1,2*mm)]
             story.append(Spacer(1,2*mm))
-    pnv = hi.get('platform_native_variants', {})
+    pnv = safe_dict(hi.get('platform_native_variants'))
     if pnv:
         story.append(tag("TOP 3 HOOKS BY PREDICTED CTR"))
         for rk, rd in pnv.items():
@@ -202,7 +207,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
             story += [rt, Spacer(1,3*mm)]
 
     # S6 NARRATIVE LANDSCAPE
-    nl = data.get('narrative_landscape', {})
+    nl = safe_dict(data.get('narrative_landscape'))
     story += sec_header(6, "Narrative Landscape")
     story.append(tag("COMPETITOR NARRATIVES"))
     for comp, narr in nl.get('competitor_narratives', {}).items():
@@ -216,7 +221,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         for i, angle in enumerate(angles, 1): story += [hook_box(f"{i}. {angle}"), Spacer(1,2*mm)]
 
     # S7 CREATIVE FORMAT
-    cf = data.get('creative_format', {})
+    cf = safe_dict(data.get('creative_format'))
     story += sec_header(7, "Creative Format Intelligence")
     for key, label in [('top_performing_formats','TOP PERFORMING FORMATS'),('emerging_opportunities','EMERGING OPPORTUNITIES')]:
         items = cf.get(key, [])
@@ -227,10 +232,10 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     if cf.get('format_recommendations'): story += [tag("FORMAT RECOMMENDATION"), Paragraph(cl(cf.get('format_recommendations','')), S['body'])]
 
     # S8 CREATIVE VOLUME REQUIREMENTS
-    cv = data.get('creative_volume_requirements', {})
+    cv = safe_dict(data.get('creative_volume_requirements'))
     story += sec_header(8, "Creative Volume Requirements")
-    wv = cv.get('weekly_creative_volume', {})
-    fm = cv.get('format_mix', {})
+    wv = safe_dict(cv.get('weekly_creative_volume'))
+    fm = safe_dict(cv.get('format_mix'))
     story += [kv_table([("CREATIVES PER MONTH", cv.get('creatives_per_month','')),
         ("STATIC IMAGES PER WEEK", wv.get('static_images','')),
         ("VIDEO CONCEPTS PER WEEK", wv.get('video_concepts','')),
@@ -240,7 +245,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         ("PRODUCTION BUDGET", cv.get('creative_production_budget_estimate',''))]), Spacer(1,4*mm)]
 
     # S9 PLATFORM INTELLIGENCE
-    pi = data.get('platform_intelligence', {})
+    pi = safe_dict(data.get('platform_intelligence'))
     story += sec_header(9, "Platform Intelligence")
     for key, label in [('facebook_strategy','FACEBOOK STRATEGY'),('instagram_strategy','INSTAGRAM STRATEGY'),
         ('reels_strategy','REELS STRATEGY'),('asc_campaign_structure','ASC CAMPAIGN STRUCTURE'),
@@ -249,32 +254,36 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
 
     # S10 AUDIENCE INTELLIGENCE
-    ai_d = data.get('audience_intelligence', {})
+    ai_d = safe_dict(data.get('audience_intelligence'))
     story += sec_header(10, "Audience Intelligence")
     for seg_key, seg_label in [('primary_segment','PRIMARY SEGMENT'),('secondary_segment','SECONDARY SEGMENT')]:
-        seg = ai_d.get(seg_key, {})
+        seg = safe_dict(ai_d.get(seg_key))
         if seg:
             story.append(tag(seg_label))
-            seg_rows = [(k.replace('_',' ').upper(), ', '.join(v) if isinstance(v,list) else v) for k,v in seg.items()]
+            if not isinstance(seg, dict): seg = {}
+            seg_rows = [(k.replace('_',' ').upper(), ', '.join(v) if isinstance(v,list) else str(v)) for k,v in seg.items()]
             story += [kv_table(seg_rows), Spacer(1,4*mm)]
-    geo = ai_d.get('geographic_nuance', {})
-    if geo: story += [tag("GEOGRAPHIC NUANCE"), kv_table([(k.replace('_',' ').upper(), v) for k,v in geo.items()]), Spacer(1,4*mm)]
+    geo = safe_dict(ai_d.get('geographic_nuance'))
+    if geo and isinstance(geo, dict): story += [tag("GEOGRAPHIC NUANCE"), kv_table([(k.replace('_',' ').upper(), str(v)) for k,v in geo.items()]), Spacer(1,4*mm)]
 
     # S11 OFFER ARCHITECTURE
-    oa = data.get('offer_architecture', {})
+    oa = safe_dict(data.get('offer_architecture'))
     story += sec_header(11, "Offer Architecture")
     if oa.get('recommended_price_point'): story += [tag("RECOMMENDED PRICE POINT"), Paragraph(cl(oa.get('recommended_price_point','')), S['body']), Spacer(1,3*mm)]
     if oa.get('first_order_hook'): story += [tag("FIRST ORDER HOOK"), hook_box(oa.get('first_order_hook','')), Spacer(1,3*mm)]
     bundles = oa.get('bundle_strategy', {})
     if bundles:
         story.append(tag("BUNDLE STRATEGY"))
-        for k, v in bundles.items(): story.append(Paragraph(f"• <b>{cl(k.upper())}:</b> {cl(v)}", S['bullet']))
+        if isinstance(bundles, dict):
+            for k, v in bundles.items(): story.append(Paragraph(f"• <b>{cl(k.upper())}:</b> {cl(str(v))}", S['bullet']))
+        elif isinstance(bundles, list):
+            for item in bundles: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
         story.append(Spacer(1,3*mm))
     if oa.get('price_justification'): story += [tag("PRICE JUSTIFICATION"), Paragraph(cl(oa.get('price_justification','')), S['body']), Spacer(1,3*mm)]
     if oa.get('discount_guardrails'): story += [tag("DISCOUNT GUARDRAILS"), Paragraph(cl(oa.get('discount_guardrails','')), S['alert']), Spacer(1,3*mm)]
 
     # S12 UNIT ECONOMICS
-    ue = data.get('unit_economics', {})
+    ue = safe_dict(data.get('unit_economics'))
     story += sec_header(12, "Unit Economics")
     mt = Table([[[Paragraph("TARGET CAC", S['label']), Paragraph(cl(str(ue.get('target_cac',''))), S['metric'])],
         [Paragraph("BREAK-EVEN ROAS", S['label']), Paragraph(cl(str(ue.get('break_even_roas',''))), S['metric'])],
@@ -283,24 +292,24 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         ('INNERGRID',(0,0),(-1,-1),0.5,ACCENT),('TOPPADDING',(0,0),(-1,-1),10),
         ('BOTTOMPADDING',(0,0),(-1,-1),10),('LEFTPADDING',(0,0),(-1,-1),10)]))
     story += [mt, Spacer(1,4*mm)]
-    roas = ue.get('realistic_roas_timeline', {})
+    roas = safe_dict(ue.get('realistic_roas_timeline'))
     if roas:
         story.append(tag("REALISTIC ROAS TIMELINE"))
         for k, label in [('month_1_2_expectation','MONTH 1-2'),('month_3_4_expectation','MONTH 3-4'),('month_5_6_expectation','MONTH 5-6')]:
             v = roas.get(k, '')
             if v: story.append(Paragraph(f"<b>{label}:</b> {cl(v)}", S['body']))
         story.append(Spacer(1,3*mm))
-    india = ue.get('india_specific_factors', {})
-    if india: story += [tag("INDIA-SPECIFIC FACTORS"), kv_table([(k.replace('_',' ').upper(), v) for k,v in india.items()]), Spacer(1,4*mm)]
+    india = safe_dict(ue.get('india_specific_factors'))
+    if india and isinstance(india, dict): story += [tag("INDIA-SPECIFIC FACTORS"), kv_table([(k.replace('_',' ').upper(), str(v)) for k,v in india.items()]), Spacer(1,4*mm)]
 
     # S13 CREATIVE TEST MATRIX
-    ctm = data.get('creative_test_matrix', {})
+    ctm = safe_dict(data.get('creative_test_matrix'))
     story += sec_header(13, "Creative Test Matrix")
     story += [kv_table([("TESTING BUDGET", ctm.get('testing_budget_percentage','')),
         ("VALIDATION TIMELINE", ctm.get('validation_timeline','')),
         ("WEEKLY VOLUME DURING TEST", ctm.get('weekly_creative_volume_during_test',''))]), Spacer(1,4*mm)]
     for hyp_key in ['test_hypothesis_1','test_hypothesis_2','test_hypothesis_3']:
-        hyp = ctm.get(hyp_key, {})
+        hyp = safe_dict(ctm.get(hyp_key))
         if not isinstance(hyp, dict): continue
         story.append(black_hdr(f"HYPOTHESIS {hyp_key.split('_')[-1]} — {cl(hyp.get('hook_angle',''))}"))
         ht = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
@@ -315,7 +324,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         story += [ht, Spacer(1,3*mm)]
 
     # S14 CREATIVE EXECUTION BRIEFS
-    ceb = data.get('creative_execution_briefs', {})
+    ceb = safe_dict(data.get('creative_execution_briefs'))
     story += sec_header(14, "Creative Execution Briefs")
     story += [Paragraph("5 complete ready-to-shoot briefs. Execute on day one. No questions needed.", S['body']), Spacer(1,4*mm)]
     for brief_key, brief in ceb.items():
@@ -354,7 +363,7 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         story.append(Spacer(1,6*mm))
 
     # S15 LANDING PAGE INTELLIGENCE
-    lp = data.get('landing_page_intelligence', {})
+    lp = safe_dict(data.get('landing_page_intelligence'))
     story += sec_header(15, "Landing Page Intelligence")
     for key, label in [('hero_section_strategy','HERO SECTION STRATEGY'),('offer_placement','OFFER PLACEMENT'),
         ('mobile_optimization_factors','MOBILE OPTIMIZATION — INDIA')]:
@@ -372,13 +381,13 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     if lp.get('recommended_page_structure'): story += [tag("RECOMMENDED PAGE STRUCTURE"), Paragraph(cl(lp.get('recommended_page_structure','')), S['body'])]
 
     # S16 LAUNCH RECOMMENDATIONS
-    lr = data.get('launch_recommendations', {})
+    lr = safe_dict(data.get('launch_recommendations'))
     story += sec_header(16, "Launch Recommendations")
     for phase_key, phase_label, phase_color in [
         ('phase_1','PHASE 1 — DAYS 1-30', GREEN_OK),
         ('phase_2','PHASE 2 — DAYS 31-60', ACCENT),
         ('phase_3','PHASE 3 — DAYS 61-90+', colors.HexColor("#2980B9"))]:
-        phase = lr.get(phase_key, {})
+        phase = safe_dict(lr.get(phase_key))
         if not isinstance(phase, dict): continue
         story.append(black_hdr(phase_label, phase_color))
         pt = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
@@ -393,19 +402,19 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         story.append(Spacer(1,4*mm))
 
     # S17 BUDGET DEPLOYMENT
-    bd = data.get('budget_deployment', {})
+    bd = safe_dict(data.get('budget_deployment'))
     story += sec_header(17, "Budget Deployment")
     if bd.get('total_monthly_budget'): story += [tag("TOTAL MONTHLY BUDGET"), Paragraph(cl(bd.get('total_monthly_budget','')), S['metric']), Spacer(1,3*mm)]
     for key, label in [('asc_campaign_structure','ASC CAMPAIGN STRUCTURE'),('creative_refresh_cadence','CREATIVE REFRESH CADENCE'),
         ('scaling_triggers','SCALING TRIGGERS'),('scalability_ceiling','SCALABILITY CEILING')]:
         v = bd.get(key, '')
         if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
-    expected = bd.get('expected_metrics', {})
+    expected = safe_dict(bd.get('expected_metrics'))
     if isinstance(expected, dict) and expected:
         story += [tag("EXPECTED METRICS BY MONTH"), kv_table([(k.replace('_',' ').upper(), v) for k,v in expected.items()]), Spacer(1,4*mm)]
 
     # S18 RISK FACTORS
-    rf = data.get('risk_factors', {})
+    rf = safe_dict(data.get('risk_factors'))
     story += sec_header(18, "Risk Factors")
     for key, label, color in [
         ('competitive_response_risk','COMPETITIVE RESPONSE RISK', MID_GRAY),
@@ -485,11 +494,14 @@ def generate_pdf():
             report_data = json.loads(raw_json)
         except json.JSONDecodeError:
             import re as _re2
-            # Find outermost JSON object
             match = _re2.search(r'\{.*\}', raw_json, _re2.DOTALL)
             if match:
                 raw_json = match.group(0)
             report_data = json.loads(raw_json)
+
+        # Handle double-encoded JSON (json.loads returns string instead of dict)
+        if isinstance(report_data, str):
+            report_data = json.loads(report_data)
 
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
             output_path = f.name
