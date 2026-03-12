@@ -472,7 +472,7 @@ def generate_pdf():
                 raw_json = claude_response
 
         if not raw_json:
-            raw_json = body.get('report_json', '')
+    raw_json = body.get('report_json', '') or body.get('Report_json', '')
 
         raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
         raw_json = re.sub(r'^```\s*', '', raw_json)
