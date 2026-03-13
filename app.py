@@ -46,6 +46,7 @@ S = {
 
 def cl(t):
     if not isinstance(t, str): t = str(t)
+    t = t.replace('₹', 'Rs.').replace('\u20b9', 'Rs.')
     return t.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
 
 def to_list(val):
@@ -285,6 +286,8 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     if angles:
         story.append(tag("PLUG-AND-PLAY NARRATIVE SCRIPTS"))
         for i, angle in enumerate(angles, 1):
+            if isinstance(angle, dict):
+                angle = angle.get('script') or angle.get('angle') or str(angle)
             story += [hook_box(f"{i}. {angle}"), Spacer(1,2*mm)]
 
     # ── S7 CREATIVE FORMAT INTELLIGENCE ───────────────────────────────────────
