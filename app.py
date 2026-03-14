@@ -180,6 +180,42 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
         ('BOTTOMPADDING',(0,0),(-1,-1),3),('LEFTPADDING',(0,0),(-1,-1),10),
         ('RIGHTPADDING',(0,0),(-1,-1),10),('ALIGN',(0,0),(-1,-1),'CENTER')]))
     story += [Spacer(1,25*mm), ct, PageBreak()]
+    # ── HOW TO USE THIS REPORT ─────────────────────────────────────────────────
+    story += [PageBreak()]
+    story += sec_header(0, "How to Use This Report")
+    story += [Paragraph("This report is structured to guide you from market understanding to campaign execution. Use the section map below to navigate based on where you are in your workflow.", S['body']), Spacer(1,4*mm)]
+
+    usage_rows = [
+        ("BEFORE BRIEFING YOUR CREATIVE TEAM",    "Sections 5, 7, 14 — Hook Intelligence, Creative Format, Execution Briefs"),
+        ("BEFORE SETTING UP YOUR CAMPAIGN",        "Sections 9, 13, 17 — Platform Intelligence, Test Matrix, Budget Deployment"),
+        ("BEFORE DECIDING YOUR OFFER",             "Sections 11, 12 — Offer Architecture, Unit Economics"),
+        ("BEFORE BUILDING YOUR LANDING PAGE",      "Section 15 — Landing Page Intelligence"),
+        ("TO UNDERSTAND THE COMPETITIVE LANDSCAPE","Sections 4, 6 — Competitive Ad Intelligence, Narrative Landscape"),
+        ("TO KNOW YOUR TARGET AUDIENCE",           "Section 10 — Audience Intelligence"),
+        ("TO PLAN YOUR 90-DAY LAUNCH ROADMAP",     "Section 16 — Launch Recommendations"),
+        ("TO ASSESS RISK BEFORE SPENDING",         "Section 18 — Risk Factors"),
+    ]
+    story += [kv_table(usage_rows, 70*mm), Spacer(1,6*mm)]
+    story += [black_hdr("RECOMMENDED READING ORDER FOR AGENCIES")]
+    order_rows = [
+        ("STEP 1 — Understand the market",    "Sections 1, 2, 3 — Keywords, Saturation, Benchmarks"),
+        ("STEP 2 — Study the competition",    "Sections 4, 6 — Competitive Intelligence, Narrative Landscape"),
+        ("STEP 3 — Define the audience",      "Section 10 — Audience Intelligence"),
+        ("STEP 4 — Lock the offer",           "Sections 11, 12 — Offer Architecture, Unit Economics"),
+        ("STEP 5 — Plan the creatives",       "Sections 5, 7, 8, 14 — Hooks, Format, Volume, Execution Briefs"),
+        ("STEP 6 — Set up the campaign",      "Sections 9, 13, 17 — Platform, Test Matrix, Budget"),
+        ("STEP 7 — Build the landing page",   "Section 15 — Landing Page Intelligence"),
+        ("STEP 8 — Launch with a clear plan", "Section 16 — Launch Recommendations"),
+        ("STEP 9 — Know your risks upfront",  "Section 18 — Risk Factors"),
+    ]
+    order_t = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(v), S['body'])] for k,v in order_rows],
+        colWidths=[60*mm, 110*mm])
+    order_t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.5,BORDER),
+        ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+        ('LEFTPADDING',(0,0),(-1,-1),8)]))
+    story += [order_t, Spacer(1,4*mm)]
+    story += [PageBreak()]
 
     # ── S1 KEYWORD UNIVERSE ────────────────────────────────────────────────────
     kw = safe_dict(data.get('keyword_universe'))
