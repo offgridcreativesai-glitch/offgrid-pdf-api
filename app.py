@@ -182,7 +182,9 @@ def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     story += [Spacer(1,25*mm), ct, PageBreak()]
     # ── HOW TO USE THIS REPORT ─────────────────────────────────────────────────
     story += [PageBreak()]
-    story += sec_header(0, "How to Use This Report")
+    story += [Spacer(1,6*mm), Paragraph("HOW TO USE THIS REPORT", S['sec_num']),
+              Paragraph("How to Use This Report", S['sec_title']),
+              HRFlowable(width="100%", thickness=1.5, color=ACCENT), Spacer(1,4*mm)]
     story += [Paragraph("This report is structured to guide you from market understanding to campaign execution. Use the section map below to navigate based on where you are in your workflow.", S['body']), Spacer(1,4*mm)]
 
     usage_rows = [
