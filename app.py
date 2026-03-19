@@ -489,6 +489,9 @@ def generate_pdf():
         raw_json = re.sub(r'^```\s*', '', raw_json)
         raw_json = re.sub(r'\s*```$', '', raw_json)
 
+        # Sanitize control characters that break JSON parsing
+        raw_json = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw_json)
+
         # Attempt JSON repair for common LLM output issues
         try:
             report_data = json.loads(raw_json)
