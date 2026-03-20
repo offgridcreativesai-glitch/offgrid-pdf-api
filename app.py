@@ -684,13 +684,22 @@ def generate_pdf():
 
 
 def build_report1_pdf(data, brand_name, brand_category, brand_market, output_file):
+    logger.info("build_report1_pdf() STARTED")
+    current_section = "INIT"
     W = 170*mm
     today = datetime.now().strftime("%B %d, %Y")
     doc = SimpleDocTemplate(output_file, pagesize=A4,
         rightMargin=20*mm, leftMargin=20*mm, topMargin=20*mm, bottomMargin=20*mm)
     story = []
 
+    AI_EST = ParagraphStyle('AIE', fontName='Helvetica-Bold', fontSize=7,
+        textColor=colors.HexColor("#E67E22"), spaceAfter=2, spaceBefore=2)
+
+    def ai_estimate_note(text="AI ESTIMATE — based on public data analysis, not verified metrics"):
+        return Paragraph(text, AI_EST)
+
     # ── COVER ──────────────────────────────────────────────────────────────────
+    current_section = "COVER"
     cover_rows = [
         [Paragraph("SOCIAL MEDIA BRAND INTELLIGENCE REPORT", ParagraphStyle('CT', fontName='Helvetica-Bold', fontSize=10, textColor=ACCENT, alignment=TA_CENTER))],
         [Spacer(1,18*mm)],
@@ -713,8 +722,10 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         ('BOTTOMPADDING',(0,0),(-1,-1),3),('LEFTPADDING',(0,0),(-1,-1),10),
         ('RIGHTPADDING',(0,0),(-1,-1),10),('ALIGN',(0,0),(-1,-1),'CENTER')]))
     story += [Spacer(1,25*mm), ct, PageBreak()]
+    logger.info("build_report1_pdf: COVER OK")
 
     # ── HOW TO USE ─────────────────────────────────────────────────────────────
+    current_section = "HOW TO USE"
     story += [Spacer(1,6*mm), Paragraph("HOW TO USE THIS REPORT", S['sec_num']),
               Paragraph("How to Use This Report", S['sec_title']),
               HRFlowable(width="100%", thickness=1.5, color=ACCENT), Spacer(1,4*mm)]
@@ -730,189 +741,284 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         ("TO KNOW WHAT TO DO TODAY",             "Section 15 — Action Plan"),
     ]
     story += [kv_table(usage_rows, 70*mm), Spacer(1,4*mm), PageBreak()]
+    logger.info("build_report1_pdf: HOW TO USE OK")
 
     # ── S1 BRAND PRESENCE SNAPSHOT ─────────────────────────────────────────────
-    s1 = safe_dict(data.get('brand_presence_snapshot'))
-    story += sec_header(1, "Brand Presence Snapshot")
-    for key, label in [('platform_coverage','PLATFORM COVERAGE'),('posting_consistency','POSTING CONSISTENCY'),
-                       ('content_mix_ratio','CONTENT MIX RATIO'),('overall_brand_health_score','BRAND HEALTH SCORE'),
-                       ('one_line_diagnosis','DIAGNOSIS')]:
-        v = s1.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+    try:
+        current_section = "S1 Brand Presence Snapshot"
+        s1 = safe_dict(data.get('brand_presence_snapshot'))
+        story += sec_header(1, "Brand Presence Snapshot")
+        for key, label in [('platform_coverage','PLATFORM COVERAGE'),('posting_consistency','POSTING CONSISTENCY'),
+                           ('content_mix_ratio','CONTENT MIX RATIO'),('overall_brand_health_score','BRAND HEALTH SCORE'),
+                           ('one_line_diagnosis','DIAGNOSIS')]:
+            v = s1.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_report1_pdf: S1 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S2 PLATFORM FIT SCORE ──────────────────────────────────────────────────
-    s2 = safe_dict(data.get('platform_fit_score'))
-    story += sec_header(2, "Platform Fit Score")
-    for platform in ['instagram','facebook','youtube','linkedin']:
-        score = s2.get(platform, '')
-        if score: story.append(Paragraph(f"<b>{platform.upper()}:</b> {cl(val_to_str(score))}/10", S['body']))
-    story.append(Spacer(1,3*mm))
-    for key, label in [('which_platform_to_prioritize','PRIORITISE'),('which_to_deprioritize','DEPRIORITISE')]:
-        v = s2.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+    try:
+        current_section = "S2 Platform Fit Score"
+        s2 = safe_dict(data.get('platform_fit_score'))
+        story += sec_header(2, "Platform Fit Score")
+        for platform in ['instagram','facebook','youtube','linkedin']:
+            score = s2.get(platform, '')
+            if score: story.append(Paragraph(f"<b>{platform.upper()}:</b> {cl(val_to_str(score))}/10", S['body']))
+        story.append(Spacer(1,3*mm))
+        for key, label in [('which_platform_to_prioritize','PRIORITISE'),('which_to_deprioritize','DEPRIORITISE')]:
+            v = s2.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_report1_pdf: S2 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S3 CONTENT PERFORMANCE ANALYSIS ───────────────────────────────────────
-    s3 = safe_dict(data.get('content_performance_analysis'))
-    story += sec_header(3, "Content Performance Analysis")
-    for key, label in [('top_content_formats','TOP FORMATS'),('top_topics','TOP TOPICS'),
-                       ('best_posting_times','BEST POSTING TIMES'),('engagement_patterns','ENGAGEMENT PATTERNS'),
-                       ('what_drives_saves','WHAT DRIVES SAVES'),('what_drives_shares','WHAT DRIVES SHARES')]:
-        v = s3.get(key, '')
-        if v:
-            items = to_list(v)
+    try:
+        current_section = "S3 Content Performance Analysis"
+        s3 = safe_dict(data.get('content_performance_analysis'))
+        story += sec_header(3, "Content Performance Analysis")
+        for key, label in [('top_content_formats','TOP FORMATS'),('top_topics','TOP TOPICS'),
+                           ('best_posting_times','BEST POSTING TIMES'),('engagement_patterns','ENGAGEMENT PATTERNS'),
+                           ('what_drives_saves','WHAT DRIVES SAVES'),('what_drives_shares','WHAT DRIVES SHARES')]:
+            v = s3.get(key, '')
+            if v:
+                items = to_list(v)
+                if items:
+                    story.append(tag(label))
+                    for item in items: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
+                    story.append(Spacer(1,3*mm))
+                else:
+                    story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_report1_pdf: S3 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    # ── S4 ENGAGEMENT QUALITY SCORE ────────────────────────────────────────────
+    try:
+        current_section = "S4 Engagement Quality Score"
+        s4 = safe_dict(data.get('engagement_quality_score'))
+        story += sec_header(4, "Engagement Quality Score")
+        story.append(ai_estimate_note("* Save Rate is an AI estimate — Instagram does not expose save data publicly"))
+        eq_rows = [
+            ("AVG ENGAGEMENT RATE",    val_to_str(s4.get('avg_engagement_rate',''))),
+            ("VS CATEGORY BENCHMARK",  val_to_str(s4.get('vs_category_benchmark',''))),
+            ("COMMENT TO LIKE RATIO",  val_to_str(s4.get('comment_to_like_ratio',''))),
+            ("SAVE RATE ESTIMATE *",   val_to_str(s4.get('save_rate_estimate',''))),
+            ("AUTHENTICITY SIGNAL",    val_to_str(s4.get('engagement_authenticity_signal',''))),
+        ]
+        story += [kv_table(eq_rows), Spacer(1,4*mm)]
+        logger.info("build_report1_pdf: S4 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    # ── S5 COMPETITOR BENCHMARKING ─────────────────────────────────────────────
+    try:
+        current_section = "S5 Competitor Benchmarking"
+        s5 = safe_dict(data.get('competitor_benchmarking'))
+        story += sec_header(5, "Competitor Benchmarking")
+        for comp_name, comp_data in s5.items():
+            if not isinstance(comp_data, dict): continue
+            story.append(black_hdr(comp_name.upper()))
+            comp_rows = [
+                ("FOLLOWERS",           val_to_str(comp_data.get('follower_count',''))),
+                ("AVG ENGAGEMENT",      val_to_str(comp_data.get('avg_engagement_rate',''))),
+                ("TOP FORMAT",          val_to_str(comp_data.get('top_content_format',''))),
+                ("PRIMARY HOOK STYLE",  val_to_str(comp_data.get('primary_hook_style',''))),
+                ("POSTING FREQUENCY",   val_to_str(comp_data.get('posting_frequency',''))),
+                ("BIGGEST WEAKNESS",    val_to_str(comp_data.get('biggest_weakness',''))),
+                ("WHAT THEY OWN",       val_to_str(comp_data.get('what_they_own_in_audience_mind',''))),
+            ]
+            story += [kv_table(comp_rows, 42*mm), Spacer(1,4*mm)]
+        logger.info("build_report1_pdf: S5 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    # ── S6 CONTENT GAP ANALYSIS ────────────────────────────────────────────────
+    try:
+        current_section = "S6 Content Gap Analysis"
+        s6 = data.get('content_gap_analysis', [])
+        story += sec_header(6, "Content Gap Analysis")
+        story += [Paragraph("Content categories competitors are NOT covering — these are yours to own.", S['body']), Spacer(1,3*mm)]
+        for gap in to_list(s6):
+            story += [hook_box(gap), Spacer(1,2*mm)]
+        logger.info("build_report1_pdf: S6 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    # ── S7 HOOK & FORMAT MATRIX ────────────────────────────────────────────────
+    try:
+        current_section = "S7 Hook & Format Matrix"
+        s7 = safe_dict(data.get('hook_and_format_matrix'))
+        story += sec_header(7, "Hook & Format Matrix")
+        hooks = to_list(s7.get('top_3_hooks_by_engagement', []))
+        if hooks:
+            story.append(tag("TOP 3 HOOKS BY ENGAGEMENT"))
+            for h in hooks: story += [hook_box(h), Spacer(1,2*mm)]
+            story.append(Spacer(1,2*mm))
+        for key, label in [('best_performing_format','BEST FORMAT'),('worst_performing_format','WORST FORMAT'),
+                           ('optimal_video_length','OPTIMAL VIDEO LENGTH'),('optimal_caption_length','OPTIMAL CAPTION LENGTH')]:
+            v = s7.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_report1_pdf: S7 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    # ── S8 HASHTAG & DISCOVERY ─────────────────────────────────────────────────
+    try:
+        current_section = "S8 Hashtag & Discovery"
+        s8 = safe_dict(data.get('hashtag_discovery_effectiveness'))
+        story += sec_header(8, "Hashtag & Discovery Effectiveness")
+        top_tags = to_list(s8.get('top_hashtags_used_by_competitors', []))
+        if top_tags:
+            story.append(tag("TOP COMPETITOR HASHTAGS"))
+            story.append(chip_row(top_tags, 3))
+            story.append(Spacer(1,3*mm))
+        if s8.get('reach_vs_engagement_tradeoff'):
+            story += [tag("REACH VS ENGAGEMENT TRADEOFF"), Paragraph(cl(val_to_str(s8.get('reach_vs_engagement_tradeoff',''))), S['body']), Spacer(1,3*mm)]
+        rec_tags = to_list(s8.get('recommended_hashtag_stack', []))
+        if rec_tags:
+            story.append(tag("RECOMMENDED HASHTAG STACK"))
+            story.append(chip_row(rec_tags, 3))
+            story.append(Spacer(1,3*mm))
+        logger.info("build_report1_pdf: S8 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    # ── S9 AUDIENCE SENTIMENT ──────────────────────────────────────────────────
+    try:
+        current_section = "S9 Audience Sentiment"
+        s9 = safe_dict(data.get('audience_sentiment_analysis'))
+        story += sec_header(9, "Audience Sentiment Analysis")
+        for key, label in [('top_positive_triggers','POSITIVE TRIGGERS'),('top_negative_triggers','NEGATIVE TRIGGERS'),
+                           ('common_objections','COMMON OBJECTIONS'),('purchase_intent_signals','PURCHASE INTENT SIGNALS')]:
+            items = to_list(s9.get(key, []))
             if items:
                 story.append(tag(label))
                 for item in items: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
                 story.append(Spacer(1,3*mm))
-            else:
-                story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
-
-    # ── S4 ENGAGEMENT QUALITY SCORE ────────────────────────────────────────────
-    s4 = safe_dict(data.get('engagement_quality_score'))
-    story += sec_header(4, "Engagement Quality Score")
-    eq_rows = [
-        ("AVG ENGAGEMENT RATE",    s4.get('avg_engagement_rate','')),
-        ("VS CATEGORY BENCHMARK",  s4.get('vs_category_benchmark','')),
-        ("COMMENT TO LIKE RATIO",  s4.get('comment_to_like_ratio','')),
-        ("SAVE RATE ESTIMATE",     s4.get('save_rate_estimate','')),
-        ("AUTHENTICITY SIGNAL",    s4.get('engagement_authenticity_signal','')),
-    ]
-    story += [kv_table(eq_rows), Spacer(1,4*mm)]
-
-    # ── S5 COMPETITOR BENCHMARKING ─────────────────────────────────────────────
-    s5 = safe_dict(data.get('competitor_benchmarking'))
-    story += sec_header(5, "Competitor Benchmarking")
-    for comp_name, comp_data in s5.items():
-        if not isinstance(comp_data, dict): continue
-        story.append(black_hdr(comp_name.upper()))
-        comp_rows = [
-            ("FOLLOWERS",           comp_data.get('follower_count','')),
-            ("AVG ENGAGEMENT",      comp_data.get('avg_engagement_rate','')),
-            ("TOP FORMAT",          comp_data.get('top_content_format','')),
-            ("PRIMARY HOOK STYLE",  comp_data.get('primary_hook_style','')),
-            ("POSTING FREQUENCY",   comp_data.get('posting_frequency','')),
-            ("BIGGEST WEAKNESS",    comp_data.get('biggest_weakness','')),
-            ("WHAT THEY OWN",       comp_data.get('what_they_own_in_audience_mind','')),
-        ]
-        story += [kv_table(comp_rows, 42*mm), Spacer(1,4*mm)]
-
-    # ── S6 CONTENT GAP ANALYSIS ────────────────────────────────────────────────
-    s6 = data.get('content_gap_analysis', [])
-    story += sec_header(6, "Content Gap Analysis")
-    story += [Paragraph("Content categories competitors are NOT covering — these are yours to own.", S['body']), Spacer(1,3*mm)]
-    for gap in to_list(s6):
-        story += [hook_box(gap), Spacer(1,2*mm)]
-
-    # ── S7 HOOK & FORMAT MATRIX ────────────────────────────────────────────────
-    s7 = safe_dict(data.get('hook_and_format_matrix'))
-    story += sec_header(7, "Hook & Format Matrix")
-    hooks = to_list(s7.get('top_3_hooks_by_engagement', []))
-    if hooks:
-        story.append(tag("TOP 3 HOOKS BY ENGAGEMENT"))
-        for h in hooks: story += [hook_box(h), Spacer(1,2*mm)]
-        story.append(Spacer(1,2*mm))
-    for key, label in [('best_performing_format','BEST FORMAT'),('worst_performing_format','WORST FORMAT'),
-                       ('optimal_video_length','OPTIMAL VIDEO LENGTH'),('optimal_caption_length','OPTIMAL CAPTION LENGTH')]:
-        v = s7.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
-
-    # ── S8 HASHTAG & DISCOVERY ─────────────────────────────────────────────────
-    s8 = safe_dict(data.get('hashtag_discovery_effectiveness'))
-    story += sec_header(8, "Hashtag & Discovery Effectiveness")
-    top_tags = to_list(s8.get('top_hashtags_used_by_competitors', []))
-    if top_tags:
-        story.append(tag("TOP COMPETITOR HASHTAGS"))
-        story.append(chip_row(top_tags, 3))
-        story.append(Spacer(1,3*mm))
-    if s8.get('reach_vs_engagement_tradeoff'):
-        story += [tag("REACH VS ENGAGEMENT TRADEOFF"), Paragraph(cl(val_to_str(s8.get('reach_vs_engagement_tradeoff',''))), S['body']), Spacer(1,3*mm)]
-    rec_tags = to_list(s8.get('recommended_hashtag_stack', []))
-    if rec_tags:
-        story.append(tag("RECOMMENDED HASHTAG STACK"))
-        story.append(chip_row(rec_tags, 3))
-        story.append(Spacer(1,3*mm))
-
-    # ── S9 AUDIENCE SENTIMENT ──────────────────────────────────────────────────
-    s9 = safe_dict(data.get('audience_sentiment_analysis'))
-    story += sec_header(9, "Audience Sentiment Analysis")
-    for key, label in [('top_positive_triggers','POSITIVE TRIGGERS'),('top_negative_triggers','NEGATIVE TRIGGERS'),
-                       ('common_objections','COMMON OBJECTIONS'),('purchase_intent_signals','PURCHASE INTENT SIGNALS')]:
-        items = to_list(s9.get(key, []))
-        if items:
-            story.append(tag(label))
-            for item in items: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
-            story.append(Spacer(1,3*mm))
+        logger.info("build_report1_pdf: S9 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S10 PROFILE CONVERSION AUDIT ──────────────────────────────────────────
-    s10 = safe_dict(data.get('profile_conversion_audit'))
-    story += sec_header(10, "Profile Conversion Audit")
-    for key, label in [('bio_effectiveness','BIO EFFECTIVENESS'),('link_in_bio_strategy','LINK IN BIO STRATEGY'),
-                       ('highlight_reel_structure','HIGHLIGHT REEL STRUCTURE'),('pinned_posts','PINNED POSTS'),
-                       ('profile_to_follow_conversion_rate','PROFILE TO FOLLOW CONVERSION')]:
-        v = s10.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+    try:
+        current_section = "S10 Profile Conversion Audit"
+        s10 = safe_dict(data.get('profile_conversion_audit'))
+        story += sec_header(10, "Profile Conversion Audit")
+        story.append(ai_estimate_note("* Profile-to-follow conversion rate is an AI estimate — this metric is not publicly available on Instagram"))
+        for key, label in [('bio_effectiveness','BIO EFFECTIVENESS'),('link_in_bio_strategy','LINK IN BIO STRATEGY'),
+                           ('highlight_reel_structure','HIGHLIGHT REEL STRUCTURE'),('pinned_posts','PINNED POSTS'),
+                           ('profile_to_follow_conversion_rate','PROFILE TO FOLLOW CONVERSION *')]:
+            v = s10.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_report1_pdf: S10 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S11 SHARE OF VOICE ─────────────────────────────────────────────────────
-    s11 = safe_dict(data.get('share_of_voice'))
-    story += sec_header(11, "Share of Voice")
-    sov_rows = [
-        ("CONTENT VOLUME SHARE",  s11.get('content_volume_share','')),
-        ("ENGAGEMENT SHARE",      s11.get('engagement_share','')),
-        ("CATEGORY OWNERSHIP",    s11.get('category_ownership_estimate','')),
-    ]
-    story += [kv_table(sov_rows), Spacer(1,4*mm)]
+    try:
+        current_section = "S11 Share of Voice"
+        s11 = safe_dict(data.get('share_of_voice'))
+        story += sec_header(11, "Share of Voice")
+        story.append(ai_estimate_note("AI ESTIMATE — Share of voice is calculated from public post volume and engagement data. Actual reach/impression data is not publicly accessible."))
+        sov_rows = [
+            ("CONTENT VOLUME SHARE",  val_to_str(s11.get('content_volume_share',''))),
+            ("ENGAGEMENT SHARE",      val_to_str(s11.get('engagement_share',''))),
+            ("CATEGORY OWNERSHIP",    val_to_str(s11.get('category_ownership_estimate',''))),
+        ]
+        story += [kv_table(sov_rows), Spacer(1,4*mm)]
+        logger.info("build_report1_pdf: S11 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S12 KILL LIST ──────────────────────────────────────────────────────────
-    s12 = data.get('kill_list', [])
-    story += sec_header(12, "Kill List")
-    story += [Paragraph("Stop these immediately. They are hurting your algorithmic reach and brand perception.", S['alert']), Spacer(1,3*mm)]
-    for item in to_list(s12):
-        story += [risk_box("STOP", item, RED_ALERT), Spacer(1,2*mm)]
+    try:
+        current_section = "S12 Kill List"
+        s12 = data.get('kill_list', [])
+        story += sec_header(12, "Kill List")
+        story += [Paragraph("Stop these immediately. They are hurting your algorithmic reach and brand perception.", S['alert']), Spacer(1,3*mm)]
+        for item in to_list(s12):
+            story += [risk_box("STOP", item, RED_ALERT), Spacer(1,2*mm)]
+        logger.info("build_report1_pdf: S12 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S13 MISSED CONTENT OPPORTUNITIES ──────────────────────────────────────
-    s13 = data.get('missed_content_opportunities', [])
-    story += sec_header(13, "Missed Content Opportunities")
-    story += [Paragraph("Content ideas you should start immediately.", S['body']), Spacer(1,3*mm)]
-    for item in to_list(s13):
-        story += [hook_box(item), Spacer(1,2*mm)]
+    try:
+        current_section = "S13 Missed Content Opportunities"
+        s13 = data.get('missed_content_opportunities', [])
+        story += sec_header(13, "Missed Content Opportunities")
+        story += [Paragraph("Content ideas you should start immediately.", S['body']), Spacer(1,3*mm)]
+        for item in to_list(s13):
+            story += [hook_box(item), Spacer(1,2*mm)]
+        logger.info("build_report1_pdf: S13 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S14 ORGANIC LAUNCH PLAN ────────────────────────────────────────────────
-    s14 = safe_dict(data.get('organic_launch_plan'))
-    story += sec_header(14, "Organic Launch Plan")
-    for phase_key, phase_label, phase_color in [
-        ('days_1_30','DAYS 1–30 — BUILD FOUNDATION', GREEN_OK),
-        ('days_31_60','DAYS 31–60 — GROW MOMENTUM', ACCENT),
-        ('days_61_90','DAYS 61–90 — SCALE WHAT WORKS', colors.HexColor("#2980B9"))]:
-        phase = safe_dict(s14.get(phase_key))
-        if not isinstance(phase, dict): continue
-        story.append(black_hdr(phase_label, phase_color))
-        pt = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(val_to_str(v)), S['body'])] for k,v in
-            [("CONTENT PILLARS",    phase.get('content_pillars','')),
-             ("POSTING FREQUENCY",  phase.get('posting_frequency','')),
-             ("MILESTONE METRICS",  phase.get('milestone_metrics',''))]],
-            colWidths=[38*mm, 132*mm])
-        pt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
-            ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
-            ('LEFTPADDING',(0,0),(-1,-1),8)]))
-        story.append(pt)
-        for action in to_list(phase.get('actions', [])):
-            story.append(Paragraph(f"• {cl(str(action))}", S['bullet']))
-        story.append(Spacer(1,4*mm))
+    try:
+        current_section = "S14 Organic Launch Plan"
+        s14 = safe_dict(data.get('organic_launch_plan'))
+        story += sec_header(14, "Organic Launch Plan")
+        for phase_key, phase_label, phase_color in [
+            ('days_1_30','DAYS 1–30 — BUILD FOUNDATION', GREEN_OK),
+            ('days_31_60','DAYS 31–60 — GROW MOMENTUM', ACCENT),
+            ('days_61_90','DAYS 61–90 — SCALE WHAT WORKS', colors.HexColor("#2980B9"))]:
+            phase = safe_dict(s14.get(phase_key))
+            if not isinstance(phase, dict): continue
+            story.append(black_hdr(phase_label, phase_color))
+            pt = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(val_to_str(v)), S['body'])] for k,v in
+                [("CONTENT PILLARS",    phase.get('content_pillars','')),
+                 ("POSTING FREQUENCY",  phase.get('posting_frequency','')),
+                 ("MILESTONE METRICS",  phase.get('milestone_metrics',''))]],
+                colWidths=[38*mm, 132*mm])
+            pt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
+                ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
+                ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                ('LEFTPADDING',(0,0),(-1,-1),8)]))
+            story.append(pt)
+            for action in to_list(phase.get('actions', [])):
+                story.append(Paragraph(f"• {cl(str(action))}", S['bullet']))
+            story.append(Spacer(1,4*mm))
+        logger.info("build_report1_pdf: S14 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── S15 ACTION PLAN ────────────────────────────────────────────────────────
-    s15 = data.get('action_plan', [])
-    story += sec_header(15, "Action Plan — Priority Stack")
-    story += [Paragraph("Ranked by impact vs effort. First action is executable today.", S['body']), Spacer(1,3*mm)]
-    for i, action in enumerate(to_list(s15), 1):
-        color = GREEN_OK if i == 1 else ACCENT if i <= 3 else DARK_GRAY
-        story += [risk_box(f"ACTION {i}", action, color), Spacer(1,2*mm)]
+    try:
+        current_section = "S15 Action Plan"
+        s15 = data.get('action_plan', [])
+        story += sec_header(15, "Action Plan — Priority Stack")
+        story += [Paragraph("Ranked by impact vs effort. First action is executable today.", S['body']), Spacer(1,3*mm)]
+        for i, action in enumerate(to_list(s15), 1):
+            color = GREEN_OK if i == 1 else ACCENT if i <= 3 else DARK_GRAY
+            story += [risk_box(f"ACTION {i}", action, color), Spacer(1,2*mm)]
+        logger.info("build_report1_pdf: S15 OK")
+    except Exception as e:
+        logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # ── FOOTER ─────────────────────────────────────────────────────────────────
     story += [Spacer(1,8*mm), HRFlowable(width="100%", thickness=1, color=ACCENT), Spacer(1,3*mm),
         Paragraph(f"Prepared by OffGrid Creatives AI  |  offgridcreativesai@gmail.com  |  {today}  |  Confidential  |  Version 1.0", S['footer'])]
 
     doc.build(story)
+    logger.info("build_report1_pdf() COMPLETED SUCCESSFULLY")
 
 
 @app.route('/generate-report1-pdf', methods=['POST'])
