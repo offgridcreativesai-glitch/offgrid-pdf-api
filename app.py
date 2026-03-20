@@ -4,6 +4,10 @@ import os
 import tempfile
 import base64
 import threading
+import logging
+import traceback
+from dotenv import load_dotenv
+load_dotenv()
 from flask import Flask, request, send_file, jsonify
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
@@ -14,6 +18,9 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.enums import TA_CENTER
 
 app = Flask(__name__)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
 BLACK      = colors.HexColor("#0A0A0A")
 WHITE      = colors.white
@@ -113,328 +120,473 @@ def safe_dict(val):
         return val
     return {}
 
+def val_to_str(v):
+    if isinstance(v, list):
+        return ', '.join(str(i) for i in v)
+    return str(v) if v is not None else ''
+
+def to_list(v):
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str) and v:
+        return [v]
+    return []
+
 def build_pdf(data, brand_name, brand_category, brand_market, output_file):
     W = 170*mm
     today = datetime.now().strftime("%B %d, %Y")
     doc = SimpleDocTemplate(output_file, pagesize=A4,
         rightMargin=20*mm, leftMargin=20*mm, topMargin=20*mm, bottomMargin=20*mm)
     story = []
+    current_section = "COVER"
 
-    # COVER
-    cover_rows = [
-        [Paragraph("PRE-LAUNCH AD INTELLIGENCE REPORT", ParagraphStyle('CT', fontName='Helvetica-Bold', fontSize=10, textColor=ACCENT, alignment=TA_CENTER))],
-        [Spacer(1,18*mm)], [Paragraph(brand_name.upper(), S['cover_brand'])], [Spacer(1,3*mm)],
-        [Paragraph(brand_category, S['cover_sub'])], [Spacer(1,2*mm)],
-        [Paragraph(f"Market: {brand_market}  |  {today}  |  Version 3.0", S['cover_label'])],
-        [Spacer(1,10*mm)], [HRFlowable(width=60*mm, thickness=0.5, color=ACCENT)], [Spacer(1,6*mm)],
-        [Paragraph("17-Section Performance Intelligence + 5 Ready-to-Shoot Creative Briefs",
-            ParagraphStyle('CV', fontName='Helvetica', fontSize=9, textColor=colors.HexColor("#CCCCCC"), alignment=TA_CENTER))],
-        [Spacer(1,18*mm)], [Paragraph("OffGrid Creatives AI", S['cover_og'])],
-        [Paragraph("offgridcreativesai@gmail.com", S['cover_label'])],
-    ]
-    ct = Table(cover_rows, colWidths=[W])
-    ct.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),BLACK),('TOPPADDING',(0,0),(-1,-1),3),
-        ('BOTTOMPADDING',(0,0),(-1,-1),3),('LEFTPADDING',(0,0),(-1,-1),10),
-        ('RIGHTPADDING',(0,0),(-1,-1),10),('ALIGN',(0,0),(-1,-1),'CENTER')]))
-    story += [Spacer(1,25*mm), ct, PageBreak()]
+    try:
+        # COVER
+        cover_rows = [
+            [Paragraph("PRE-LAUNCH AD INTELLIGENCE REPORT", ParagraphStyle('CT', fontName='Helvetica-Bold', fontSize=10, textColor=ACCENT, alignment=TA_CENTER))],
+            [Spacer(1,18*mm)], [Paragraph(brand_name.upper(), S['cover_brand'])], [Spacer(1,3*mm)],
+            [Paragraph(brand_category, S['cover_sub'])], [Spacer(1,2*mm)],
+            [Paragraph(f"Market: {brand_market}  |  {today}  |  Version 3.0", S['cover_label'])],
+            [Spacer(1,10*mm)], [HRFlowable(width=60*mm, thickness=0.5, color=ACCENT)], [Spacer(1,6*mm)],
+            [Paragraph("17-Section Performance Intelligence + 5 Ready-to-Shoot Creative Briefs",
+                ParagraphStyle('CV', fontName='Helvetica', fontSize=9, textColor=colors.HexColor("#CCCCCC"), alignment=TA_CENTER))],
+            [Spacer(1,18*mm)], [Paragraph("OffGrid Creatives AI", S['cover_og'])],
+            [Paragraph("offgridcreativesai@gmail.com", S['cover_label'])],
+        ]
+        ct = Table(cover_rows, colWidths=[W])
+        ct.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),BLACK),('TOPPADDING',(0,0),(-1,-1),3),
+            ('BOTTOMPADDING',(0,0),(-1,-1),3),('LEFTPADDING',(0,0),(-1,-1),10),
+            ('RIGHTPADDING',(0,0),(-1,-1),10),('ALIGN',(0,0),(-1,-1),'CENTER')]))
+        story += [Spacer(1,25*mm), ct, PageBreak()]
+        logger.info("build_pdf: COVER complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S1 KEYWORD UNIVERSE
-    kw = safe_dict(data.get('keyword_universe'))
-    story += sec_header(1, "Keyword Universe")
-    for key, label in [('search_intent_keywords','SEARCH INTENT'),('emotional_trigger_keywords','EMOTIONAL TRIGGERS'),
-        ('culture_keywords','CULTURE'),('style_keywords','STYLE'),('seasonal_keywords','SEASONAL')]:
-        items = kw.get(key, [])
-        if items: story += [tag(label), chip_row(items, 3), Spacer(1,3*mm)]
+    try:
+        current_section = "S1 KEYWORD UNIVERSE"
+        kw = safe_dict(data.get('keyword_universe'))
+        story += sec_header(1, "Keyword Universe")
+        for key, label in [('search_intent_keywords','SEARCH INTENT'),('emotional_trigger_keywords','EMOTIONAL TRIGGERS'),
+            ('culture_keywords','CULTURE'),('style_keywords','STYLE'),('seasonal_keywords','SEASONAL')]:
+            items = to_list(kw.get(key, []))
+            if items: story += [tag(label), chip_row(items, 3), Spacer(1,3*mm)]
+        logger.info("build_pdf: S1 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S2 MARKET SATURATION
-    ms = safe_dict(data.get('market_saturation'))
-    story += sec_header(2, "Market Saturation")
-    for key, label in [('category_maturity','CATEGORY MATURITY'),('content_fatigue','CONTENT FATIGUE'),
-        ('pricing_pressure','PRICING PRESSURE'),('differentiation_gaps','DIFFERENTIATION GAPS'),
-        ('audience_fragmentation','AUDIENCE FRAGMENTATION')]:
-        v = ms.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
+    try:
+        current_section = "S2 MARKET SATURATION"
+        ms = safe_dict(data.get('market_saturation'))
+        story += sec_header(2, "Market Saturation")
+        for key, label in [('category_maturity','CATEGORY MATURITY'),('content_fatigue','CONTENT FATIGUE'),
+            ('pricing_pressure','PRICING PRESSURE'),('differentiation_gaps','DIFFERENTIATION GAPS'),
+            ('audience_fragmentation','AUDIENCE FRAGMENTATION')]:
+            v = ms.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_pdf: S2 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S3 MARKET BENCHMARKS
-    mb = safe_dict(data.get('market_benchmarks'))
-    story += sec_header(3, "Market Benchmarks")
-    bench_rows = [("CPM RANGE", mb.get('typical_cpm_range','')),("CTR RANGE", mb.get('typical_ctr_range','')),
-        ("CVR RANGE", mb.get('typical_cvr_range','')),("CAC RANGE", mb.get('typical_cac_range','')),
-        ("AOV RANGE", mb.get('typical_aov_range','')),("ROAS MONTH 1-2", mb.get('average_roas_month1_2','')),
-        ("ROAS MONTH 3-4", mb.get('average_roas_month3_4','')),("ROAS MONTH 5-6", mb.get('average_roas_month5_6',''))]
-    story += [kv_table(bench_rows), Spacer(1,4*mm)]
+    try:
+        current_section = "S3 MARKET BENCHMARKS"
+        mb = safe_dict(data.get('market_benchmarks'))
+        story += sec_header(3, "Market Benchmarks")
+        bench_rows = [("CPM RANGE", mb.get('typical_cpm_range','')),("CTR RANGE", mb.get('typical_ctr_range','')),
+            ("CVR RANGE", mb.get('typical_cvr_range','')),("CAC RANGE", mb.get('typical_cac_range','')),
+            ("AOV RANGE", mb.get('typical_aov_range','')),("ROAS MONTH 1-2", mb.get('average_roas_month1_2','')),
+            ("ROAS MONTH 3-4", mb.get('average_roas_month3_4','')),("ROAS MONTH 5-6", mb.get('average_roas_month5_6',''))]
+        story += [kv_table(bench_rows), Spacer(1,4*mm)]
+        logger.info("build_pdf: S3 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S4 COMPETITIVE AD INTELLIGENCE
-    ci = safe_dict(data.get('competitive_ad_intelligence'))
-    story += sec_header(4, "Competitive Ad Intelligence")
-    for comp_name, comp_data in ci.items():
-        if not isinstance(comp_data, dict): continue
-        story.append(black_hdr(comp_name.upper()))
-        rows = [("AD FORMATS", comp_data.get('ad_formats_running','')),
-            ("PRIMARY HOOK STYLE", comp_data.get('primary_hook_style','')),
-            ("OFFER STRATEGY", comp_data.get('offer_strategy','')),
-            ("AUDIENCE TARGETING", comp_data.get('audience_targeting_style','')),
-            ("FATIGUE SCORE", f"{comp_data.get('creative_fatigue_score','?')}/10"),
-            ("SCALING SIGNALS", comp_data.get('scaling_signals','')),
-            ("STRATEGIC GAP", comp_data.get('strategic_gap',''))]
-        story += [kv_table(rows, 42*mm), Spacer(1,4*mm)]
+    try:
+        current_section = "S4 COMPETITIVE AD INTELLIGENCE"
+        ci = safe_dict(data.get('competitive_ad_intelligence'))
+        story += sec_header(4, "Competitive Ad Intelligence")
+        for comp_name, comp_data in ci.items():
+            if not isinstance(comp_data, dict): continue
+            story.append(black_hdr(comp_name.upper()))
+            rows = [("AD FORMATS", val_to_str(comp_data.get('ad_formats_running',''))),
+                ("PRIMARY HOOK STYLE", val_to_str(comp_data.get('primary_hook_style',''))),
+                ("OFFER STRATEGY", val_to_str(comp_data.get('offer_strategy',''))),
+                ("AUDIENCE TARGETING", val_to_str(comp_data.get('audience_targeting_style',''))),
+                ("FATIGUE SCORE", f"{comp_data.get('creative_fatigue_score','?')}/10"),
+                ("SCALING SIGNALS", val_to_str(comp_data.get('scaling_signals',''))),
+                ("STRATEGIC GAP", val_to_str(comp_data.get('strategic_gap','')))]
+            story += [kv_table(rows, 42*mm), Spacer(1,4*mm)]
+        logger.info("build_pdf: S4 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S5 HOOK INTELLIGENCE
-    hi = safe_dict(data.get('hook_intelligence'))
-    story += sec_header(5, "Hook Intelligence")
-    for key, label in [('scarcity_hooks','SCARCITY HOOKS'),('social_proof_hooks','SOCIAL PROOF HOOKS'),
-        ('problem_agitation_hooks','PROBLEM AGITATION HOOKS'),('curiosity_gap_hooks','CURIOSITY GAP HOOKS'),
-        ('direct_response_hooks','DIRECT RESPONSE HOOKS')]:
-        hooks = hi.get(key, [])
-        if hooks:
-            story.append(tag(label))
-            for h in hooks: story += [hook_box(h), Spacer(1,2*mm)]
-            story.append(Spacer(1,2*mm))
-    pnv = safe_dict(hi.get('platform_native_variants'))
-    if pnv:
-        story.append(tag("TOP 3 HOOKS BY PREDICTED CTR"))
-        for rk, rd in pnv.items():
-            if not isinstance(rd, dict): continue
-            story.append(black_hdr(f"RANK {rd.get('predicted_ctr_rank','?')} — {cl(rd.get('hook',''))}"))
-            rt = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
-                [("WHY IT WINS", rd.get('reason','')),("REELS OVERLAY", rd.get('reels_overlay','')),
-                 ("FEED STATIC", rd.get('feed_static','')),("CAPTION OPENING", rd.get('caption_opening',''))]],
-                colWidths=[38*mm,132*mm])
-            rt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
+    try:
+        current_section = "S5 HOOK INTELLIGENCE"
+        hi = safe_dict(data.get('hook_intelligence'))
+        story += sec_header(5, "Hook Intelligence")
+        for key, label in [('scarcity_hooks','SCARCITY HOOKS'),('social_proof_hooks','SOCIAL PROOF HOOKS'),
+            ('problem_agitation_hooks','PROBLEM AGITATION HOOKS'),('curiosity_gap_hooks','CURIOSITY GAP HOOKS'),
+            ('direct_response_hooks','DIRECT RESPONSE HOOKS')]:
+            hooks = to_list(hi.get(key, []))
+            if hooks:
+                story.append(tag(label))
+                for h in hooks: story += [hook_box(str(h)), Spacer(1,2*mm)]
+                story.append(Spacer(1,2*mm))
+        pnv = hi.get('platform_native_variants')
+        if isinstance(pnv, dict) and pnv:
+            story.append(tag("TOP 3 HOOKS BY PREDICTED CTR"))
+            for rk, rd in pnv.items():
+                if not isinstance(rd, dict): continue
+                story.append(black_hdr(f"RANK {rd.get('predicted_ctr_rank','?')} — {cl(str(rd.get('hook','')))}"))
+                rt = Table([[Paragraph(cl(str(k)), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
+                    [("WHY IT WINS", rd.get('reason','')),("REELS OVERLAY", rd.get('reels_overlay','')),
+                     ("FEED STATIC", rd.get('feed_static','')),("CAPTION OPENING", rd.get('caption_opening',''))]],
+                    colWidths=[38*mm,132*mm])
+                rt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
+                    ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
+                    ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                    ('LEFTPADDING',(0,0),(-1,-1),8)]))
+                story += [rt, Spacer(1,3*mm)]
+        elif isinstance(pnv, list) and pnv:
+            story.append(tag("TOP 3 HOOKS BY PREDICTED CTR"))
+            for rd in pnv:
+                if not isinstance(rd, dict): continue
+                story.append(black_hdr(f"RANK {rd.get('predicted_ctr_rank','?')} — {cl(str(rd.get('hook','')))}"))
+                rt = Table([[Paragraph(cl(str(k)), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
+                    [("WHY IT WINS", rd.get('reason','')),("REELS OVERLAY", rd.get('reels_overlay','')),
+                     ("FEED STATIC", rd.get('feed_static','')),("CAPTION OPENING", rd.get('caption_opening',''))]],
+                    colWidths=[38*mm,132*mm])
+                rt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
+                    ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
+                    ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                    ('LEFTPADDING',(0,0),(-1,-1),8)]))
+                story += [rt, Spacer(1,3*mm)]
+        logger.info("build_pdf: S5 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S6 NARRATIVE LANDSCAPE"
+        nl = safe_dict(data.get('narrative_landscape'))
+        story += sec_header(6, "Narrative Landscape")
+        story.append(tag("COMPETITOR NARRATIVES"))
+        comp_narr = nl.get('competitor_narratives', {})
+        if isinstance(comp_narr, dict):
+            for comp, narr in comp_narr.items():
+                story.append(Paragraph(f"<b>{cl(comp.upper())}:</b> {cl(str(narr))}", S['body']))
+        elif isinstance(comp_narr, list):
+            for narr in comp_narr:
+                story.append(Paragraph(f"• {cl(str(narr))}", S['bullet']))
+        story.append(Spacer(1,3*mm))
+        if nl.get('market_whitespace'): story += [tag("MARKET WHITESPACE"), Paragraph(cl(val_to_str(nl.get('market_whitespace',''))), S['body']), Spacer(1,3*mm)]
+        if nl.get('brand_positioning_opportunity'): story += [tag("BRAND POSITIONING OPPORTUNITY"), Paragraph(cl(val_to_str(nl.get('brand_positioning_opportunity',''))), S['body']), Spacer(1,3*mm)]
+        angles = to_list(nl.get('storytelling_angles', []))
+        if angles:
+            story.append(tag("PLUG-AND-PLAY NARRATIVE SCRIPTS"))
+            for i, angle in enumerate(angles, 1): story += [hook_box(f"{i}. {angle}"), Spacer(1,2*mm)]
+        logger.info("build_pdf: S6 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S7 CREATIVE FORMAT"
+        cf = safe_dict(data.get('creative_format'))
+        story += sec_header(7, "Creative Format Intelligence")
+        for key, label in [('top_performing_formats','TOP PERFORMING FORMATS'),('emerging_opportunities','EMERGING OPPORTUNITIES')]:
+            items = to_list(cf.get(key, []))
+            if items:
+                story.append(tag(label))
+                for item in items: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
+                story.append(Spacer(1,3*mm))
+        if cf.get('format_recommendations'): story += [tag("FORMAT RECOMMENDATION"), Paragraph(cl(val_to_str(cf.get('format_recommendations',''))), S['body'])]
+        logger.info("build_pdf: S7 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S8 CREATIVE VOLUME REQUIREMENTS"
+        cv = safe_dict(data.get('creative_volume_requirements'))
+        story += sec_header(8, "Creative Volume Requirements")
+        wv = safe_dict(cv.get('weekly_creative_volume'))
+        fm = safe_dict(cv.get('format_mix'))
+        story += [kv_table([("CREATIVES PER MONTH", val_to_str(cv.get('creatives_per_month',''))),
+            ("STATIC IMAGES PER WEEK", val_to_str(wv.get('static_images',''))),
+            ("VIDEO CONCEPTS PER WEEK", val_to_str(wv.get('video_concepts',''))),
+            ("FORMAT MIX", f"Reels {fm.get('reels_percentage','')}% / Carousel {fm.get('carousel_percentage','')}% / Static {fm.get('static_percentage','')}%"),
+            ("REFRESH FREQUENCY", val_to_str(cv.get('refresh_frequency',''))),
+            ("MIN VIABLE SET FOR ASC", val_to_str(cv.get('minimum_viable_creative_set',''))),
+            ("PRODUCTION BUDGET", val_to_str(cv.get('creative_production_budget_estimate','')))]), Spacer(1,4*mm)]
+        logger.info("build_pdf: S8 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S9 PLATFORM INTELLIGENCE"
+        pi = safe_dict(data.get('platform_intelligence'))
+        story += sec_header(9, "Platform Intelligence")
+        for key, label in [('facebook_strategy','FACEBOOK STRATEGY'),('instagram_strategy','INSTAGRAM STRATEGY'),
+            ('reels_strategy','REELS STRATEGY'),('asc_campaign_structure','ASC CAMPAIGN STRUCTURE'),
+            ('budget_allocation','BUDGET ALLOCATION'),('content_calendar','CONTENT CALENDAR')]:
+            v = pi.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        logger.info("build_pdf: S9 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S10 AUDIENCE INTELLIGENCE"
+        ai_d = safe_dict(data.get('audience_intelligence'))
+        story += sec_header(10, "Audience Intelligence")
+        for seg_key, seg_label in [('primary_segment','PRIMARY SEGMENT'),('secondary_segment','SECONDARY SEGMENT')]:
+            seg = safe_dict(ai_d.get(seg_key))
+            if seg:
+                story.append(tag(seg_label))
+                seg_rows = [(k.replace('_',' ').upper(), val_to_str(v)) for k,v in seg.items()]
+                story += [kv_table(seg_rows), Spacer(1,4*mm)]
+        geo = safe_dict(ai_d.get('geographic_nuance'))
+        if geo and isinstance(geo, dict): story += [tag("GEOGRAPHIC NUANCE"), kv_table([(k.replace('_',' ').upper(), val_to_str(v)) for k,v in geo.items()]), Spacer(1,4*mm)]
+        logger.info("build_pdf: S10 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S11 OFFER ARCHITECTURE"
+        oa = safe_dict(data.get('offer_architecture'))
+        story += sec_header(11, "Offer Architecture")
+        if oa.get('recommended_price_point'): story += [tag("RECOMMENDED PRICE POINT"), Paragraph(cl(val_to_str(oa.get('recommended_price_point',''))), S['body']), Spacer(1,3*mm)]
+        if oa.get('first_order_hook'): story += [tag("FIRST ORDER HOOK"), hook_box(val_to_str(oa.get('first_order_hook',''))), Spacer(1,3*mm)]
+        bundles = oa.get('bundle_strategy', {})
+        if bundles:
+            story.append(tag("BUNDLE STRATEGY"))
+            if isinstance(bundles, dict):
+                for k, v in bundles.items(): story.append(Paragraph(f"• <b>{cl(k.upper())}:</b> {cl(str(v))}", S['bullet']))
+            elif isinstance(bundles, list):
+                for item in bundles: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
+            story.append(Spacer(1,3*mm))
+        if oa.get('price_justification'): story += [tag("PRICE JUSTIFICATION"), Paragraph(cl(val_to_str(oa.get('price_justification',''))), S['body']), Spacer(1,3*mm)]
+        if oa.get('discount_guardrails'): story += [tag("DISCOUNT GUARDRAILS"), Paragraph(cl(val_to_str(oa.get('discount_guardrails',''))), S['alert']), Spacer(1,3*mm)]
+        logger.info("build_pdf: S11 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S12 UNIT ECONOMICS"
+        ue = safe_dict(data.get('unit_economics'))
+        story += sec_header(12, "Unit Economics")
+        mt = Table([[[Paragraph("TARGET CAC", S['label']), Paragraph(cl(str(ue.get('target_cac',''))), S['metric'])],
+            [Paragraph("BREAK-EVEN ROAS", S['label']), Paragraph(cl(str(ue.get('break_even_roas',''))), S['metric'])],
+            [Paragraph("RECOMMENDED AOV", S['label']), Paragraph(cl(str(ue.get('recommended_aov',''))), S['metric'])]]], colWidths=[W/3]*3)
+        mt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),BLACK),('BOX',(0,0),(-1,-1),1,ACCENT),
+            ('INNERGRID',(0,0),(-1,-1),0.5,ACCENT),('TOPPADDING',(0,0),(-1,-1),10),
+            ('BOTTOMPADDING',(0,0),(-1,-1),10),('LEFTPADDING',(0,0),(-1,-1),10)]))
+        story += [mt, Spacer(1,4*mm)]
+        roas = safe_dict(ue.get('realistic_roas_timeline'))
+        if roas:
+            story.append(tag("REALISTIC ROAS TIMELINE"))
+            for k, label in [('month_1_2_expectation','MONTH 1-2'),('month_3_4_expectation','MONTH 3-4'),('month_5_6_expectation','MONTH 5-6')]:
+                v = roas.get(k, '')
+                if v: story.append(Paragraph(f"<b>{label}:</b> {cl(val_to_str(v))}", S['body']))
+            story.append(Spacer(1,3*mm))
+        india = safe_dict(ue.get('india_specific_factors'))
+        if india and isinstance(india, dict): story += [tag("INDIA-SPECIFIC FACTORS"), kv_table([(k.replace('_',' ').upper(), val_to_str(v)) for k,v in india.items()]), Spacer(1,4*mm)]
+        logger.info("build_pdf: S12 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
+
+    try:
+        current_section = "S13 CREATIVE TEST MATRIX"
+        ctm = safe_dict(data.get('creative_test_matrix'))
+        story += sec_header(13, "Creative Test Matrix")
+        story += [kv_table([("TESTING BUDGET", val_to_str(ctm.get('testing_budget_percentage',''))),
+            ("VALIDATION TIMELINE", val_to_str(ctm.get('validation_timeline',''))),
+            ("WEEKLY VOLUME DURING TEST", val_to_str(ctm.get('weekly_creative_volume_during_test','')))]), Spacer(1,4*mm)]
+        for hyp_key in ['test_hypothesis_1','test_hypothesis_2','test_hypothesis_3']:
+            hyp = safe_dict(ctm.get(hyp_key))
+            if not isinstance(hyp, dict): continue
+            story.append(black_hdr(f"HYPOTHESIS {hyp_key.split('_')[-1]} — {cl(val_to_str(hyp.get('hook_angle','')))}"))
+            ht = Table([[Paragraph(cl(str(k)), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
+                [("FORMAT", hyp.get('ad_format','')),("AUDIENCE", hyp.get('target_audience','')),
+                 ("BUDGET", hyp.get('budget_allocation_percentage','')),
+                 ("SUCCESS METRIC", hyp.get('success_metric','')),("KILL CRITERIA", hyp.get('kill_criteria',''))]],
+                colWidths=[40*mm, 130*mm])
+            ht.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
                 ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
                 ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
                 ('LEFTPADDING',(0,0),(-1,-1),8)]))
-            story += [rt, Spacer(1,3*mm)]
+            story += [ht, Spacer(1,3*mm)]
+        logger.info("build_pdf: S13 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S6 NARRATIVE LANDSCAPE
-    nl = safe_dict(data.get('narrative_landscape'))
-    story += sec_header(6, "Narrative Landscape")
-    story.append(tag("COMPETITOR NARRATIVES"))
-    for comp, narr in nl.get('competitor_narratives', {}).items():
-        story.append(Paragraph(f"<b>{cl(comp.upper())}:</b> {cl(str(narr))}", S['body']))
-    story.append(Spacer(1,3*mm))
-    if nl.get('market_whitespace'): story += [tag("MARKET WHITESPACE"), Paragraph(cl(nl.get('market_whitespace','')), S['body']), Spacer(1,3*mm)]
-    if nl.get('brand_positioning_opportunity'): story += [tag("BRAND POSITIONING OPPORTUNITY"), Paragraph(cl(nl.get('brand_positioning_opportunity','')), S['body']), Spacer(1,3*mm)]
-    angles = nl.get('storytelling_angles', [])
-    if angles:
-        story.append(tag("PLUG-AND-PLAY NARRATIVE SCRIPTS"))
-        for i, angle in enumerate(angles, 1): story += [hook_box(f"{i}. {angle}"), Spacer(1,2*mm)]
+    try:
+        current_section = "S14 CREATIVE EXECUTION BRIEFS"
+        ceb = data.get('creative_execution_briefs', {})
+        story += sec_header(14, "Creative Execution Briefs")
+        story += [Paragraph("5 complete ready-to-shoot briefs. Execute on day one. No questions needed.", S['body']), Spacer(1,4*mm)]
+        # Handle both dict and list formats from Claude
+        briefs_list = []
+        if isinstance(ceb, dict):
+            briefs_list = [v for v in ceb.values() if isinstance(v, dict)]
+        elif isinstance(ceb, list):
+            briefs_list = [v for v in ceb if isinstance(v, dict)]
+        for brief in briefs_list:
+            story.append(black_hdr(f"BRIEF {brief.get('brief_number','?')} — {cl(val_to_str(brief.get('brief_name','')))}"))
+            top_t = Table([[Paragraph(cl(str(k)), S['label']), Paragraph(cl(val_to_str(v)), S['body'])] for k,v in
+                [("OBJECTIVE", brief.get('objective','')),("FORMAT", brief.get('format','')),
+                 ("AUDIO DIRECTION", brief.get('audio_direction','')),("THUMBNAIL", brief.get('thumbnail_description','')),
+                 ("CTA & OFFER", brief.get('cta_and_offer','')),("PRODUCTION REQUIREMENTS", brief.get('production_requirements','')),
+                 ("PRODUCTION COST", brief.get('production_cost_estimate',''))]],
+                colWidths=[42*mm, 128*mm])
+            top_t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
+                ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
+                ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                ('LEFTPADDING',(0,0),(-1,-1),8)]))
+            story.append(top_t)
+            scene = brief.get('scene_breakdown', '')
+            if scene:
+                scene = val_to_str(scene)
+                sh = Table([[Paragraph("SCENE BREAKDOWN", S['label'])]], colWidths=[W])
+                sh.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor("#1A1A1A")),
+                    ('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),8)]))
+                st = Table([[Paragraph(cl(scene), S['scene'])]], colWidths=[W])
+                st.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor("#F0F0F0")),
+                    ('BOX',(0,0),(-1,-1),0.3,BORDER),('TOPPADDING',(0,0),(-1,-1),8),
+                    ('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),10)]))
+                story += [sh, st]
+            ost = brief.get('on_screen_text', '')
+            if ost:
+                ost = val_to_str(ost)
+                oh = Table([[Paragraph("ON-SCREEN TEXT — IN ORDER", S['label'])]], colWidths=[W])
+                oh.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor("#1A1A1A")),
+                    ('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),8)]))
+                ot = Table([[Paragraph(cl(ost), S['body_bold'])]], colWidths=[W])
+                ot.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.5,ACCENT),
+                    ('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),10)]))
+                story += [oh, ot]
+            story.append(Spacer(1,6*mm))
+        logger.info("build_pdf: S14 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S7 CREATIVE FORMAT
-    cf = safe_dict(data.get('creative_format'))
-    story += sec_header(7, "Creative Format Intelligence")
-    for key, label in [('top_performing_formats','TOP PERFORMING FORMATS'),('emerging_opportunities','EMERGING OPPORTUNITIES')]:
-        items = cf.get(key, [])
-        if items:
-            story.append(tag(label))
-            for item in items: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
+    try:
+        current_section = "S15 LANDING PAGE INTELLIGENCE"
+        lp = safe_dict(data.get('landing_page_intelligence'))
+        story += sec_header(15, "Landing Page Intelligence")
+        for key, label in [('hero_section_strategy','HERO SECTION STRATEGY'),('offer_placement','OFFER PLACEMENT'),
+            ('mobile_optimization_factors','MOBILE OPTIMIZATION — INDIA')]:
+            v = lp.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        trust = to_list(lp.get('trust_signals_required', []))
+        if trust:
+            story.append(tag("REQUIRED TRUST SIGNALS"))
+            for t_item in trust: story.append(Paragraph(f"• {cl(str(t_item))}", S['bullet']))
             story.append(Spacer(1,3*mm))
-    if cf.get('format_recommendations'): story += [tag("FORMAT RECOMMENDATION"), Paragraph(cl(cf.get('format_recommendations','')), S['body'])]
+        killers = to_list(lp.get('conversion_killers', []))
+        if killers:
+            story.append(tag("CONVERSION KILLERS"))
+            for killer in killers: story += [risk_box("KILL", str(killer)), Spacer(1,2*mm)]
+        if lp.get('recommended_page_structure'): story += [tag("RECOMMENDED PAGE STRUCTURE"), Paragraph(cl(val_to_str(lp.get('recommended_page_structure',''))), S['body'])]
+        logger.info("build_pdf: S15 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S8 CREATIVE VOLUME REQUIREMENTS
-    cv = safe_dict(data.get('creative_volume_requirements'))
-    story += sec_header(8, "Creative Volume Requirements")
-    wv = safe_dict(cv.get('weekly_creative_volume'))
-    fm = safe_dict(cv.get('format_mix'))
-    story += [kv_table([("CREATIVES PER MONTH", cv.get('creatives_per_month','')),
-        ("STATIC IMAGES PER WEEK", wv.get('static_images','')),
-        ("VIDEO CONCEPTS PER WEEK", wv.get('video_concepts','')),
-        ("FORMAT MIX", f"Reels {fm.get('reels_percentage','')}% / Carousel {fm.get('carousel_percentage','')}% / Static {fm.get('static_percentage','')}%"),
-        ("REFRESH FREQUENCY", cv.get('refresh_frequency','')),
-        ("MIN VIABLE SET FOR ASC", cv.get('minimum_viable_creative_set','')),
-        ("PRODUCTION BUDGET", cv.get('creative_production_budget_estimate',''))]), Spacer(1,4*mm)]
+    try:
+        current_section = "S16 LAUNCH RECOMMENDATIONS"
+        lr = safe_dict(data.get('launch_recommendations'))
+        story += sec_header(16, "Launch Recommendations")
+        for phase_key, phase_label, phase_color in [
+            ('phase_1','PHASE 1 — DAYS 1-30', GREEN_OK),
+            ('phase_2','PHASE 2 — DAYS 31-60', ACCENT),
+            ('phase_3','PHASE 3 — DAYS 61-90+', colors.HexColor("#2980B9"))]:
+            phase = safe_dict(lr.get(phase_key))
+            if not isinstance(phase, dict): continue
+            story.append(black_hdr(phase_label, phase_color))
+            pt = Table([[Paragraph(cl(str(k)), S['label']), Paragraph(cl(val_to_str(v)), S['body'])] for k,v in
+                [("BUDGET", phase.get('budget','')),("SUCCESS METRICS", phase.get('success_metrics',''))]],
+                colWidths=[35*mm, 135*mm])
+            pt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
+                ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
+                ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                ('LEFTPADDING',(0,0),(-1,-1),8)]))
+            story.append(pt)
+            for action in to_list(phase.get('actions', [])): story.append(Paragraph(f"• {cl(str(action))}", S['bullet']))
+            story.append(Spacer(1,4*mm))
+        logger.info("build_pdf: S16 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S9 PLATFORM INTELLIGENCE
-    pi = safe_dict(data.get('platform_intelligence'))
-    story += sec_header(9, "Platform Intelligence")
-    for key, label in [('facebook_strategy','FACEBOOK STRATEGY'),('instagram_strategy','INSTAGRAM STRATEGY'),
-        ('reels_strategy','REELS STRATEGY'),('asc_campaign_structure','ASC CAMPAIGN STRUCTURE'),
-        ('budget_allocation','BUDGET ALLOCATION'),('content_calendar','CONTENT CALENDAR')]:
-        v = pi.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
+    try:
+        current_section = "S17 BUDGET DEPLOYMENT"
+        bd = safe_dict(data.get('budget_deployment'))
+        story += sec_header(17, "Budget Deployment")
+        if bd.get('total_monthly_budget'): story += [tag("TOTAL MONTHLY BUDGET"), Paragraph(cl(val_to_str(bd.get('total_monthly_budget',''))), S['metric']), Spacer(1,3*mm)]
+        for key, label in [('asc_campaign_structure','ASC CAMPAIGN STRUCTURE'),('creative_refresh_cadence','CREATIVE REFRESH CADENCE'),
+            ('scaling_triggers','SCALING TRIGGERS'),('scalability_ceiling','SCALABILITY CEILING')]:
+            v = bd.get(key, '')
+            if v: story += [tag(label), Paragraph(cl(val_to_str(v)), S['body']), Spacer(1,3*mm)]
+        expected = safe_dict(bd.get('expected_metrics'))
+        if isinstance(expected, dict) and expected:
+            story += [tag("EXPECTED METRICS BY MONTH"), kv_table([(k.replace('_',' ').upper(), val_to_str(v)) for k,v in expected.items()]), Spacer(1,4*mm)]
+        logger.info("build_pdf: S17 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    # S10 AUDIENCE INTELLIGENCE
-    ai_d = safe_dict(data.get('audience_intelligence'))
-    story += sec_header(10, "Audience Intelligence")
-    for seg_key, seg_label in [('primary_segment','PRIMARY SEGMENT'),('secondary_segment','SECONDARY SEGMENT')]:
-        seg = safe_dict(ai_d.get(seg_key))
-        if seg:
-            story.append(tag(seg_label))
-            if not isinstance(seg, dict): seg = {}
-            seg_rows = [(k.replace('_',' ').upper(), ', '.join(v) if isinstance(v,list) else str(v)) for k,v in seg.items()]
-            story += [kv_table(seg_rows), Spacer(1,4*mm)]
-    geo = safe_dict(ai_d.get('geographic_nuance'))
-    if geo and isinstance(geo, dict): story += [tag("GEOGRAPHIC NUANCE"), kv_table([(k.replace('_',' ').upper(), str(v)) for k,v in geo.items()]), Spacer(1,4*mm)]
-
-    # S11 OFFER ARCHITECTURE
-    oa = safe_dict(data.get('offer_architecture'))
-    story += sec_header(11, "Offer Architecture")
-    if oa.get('recommended_price_point'): story += [tag("RECOMMENDED PRICE POINT"), Paragraph(cl(oa.get('recommended_price_point','')), S['body']), Spacer(1,3*mm)]
-    if oa.get('first_order_hook'): story += [tag("FIRST ORDER HOOK"), hook_box(oa.get('first_order_hook','')), Spacer(1,3*mm)]
-    bundles = oa.get('bundle_strategy', {})
-    if bundles:
-        story.append(tag("BUNDLE STRATEGY"))
-        if isinstance(bundles, dict):
-            for k, v in bundles.items(): story.append(Paragraph(f"• <b>{cl(k.upper())}:</b> {cl(str(v))}", S['bullet']))
-        elif isinstance(bundles, list):
-            for item in bundles: story.append(Paragraph(f"• {cl(str(item))}", S['bullet']))
-        story.append(Spacer(1,3*mm))
-    if oa.get('price_justification'): story += [tag("PRICE JUSTIFICATION"), Paragraph(cl(oa.get('price_justification','')), S['body']), Spacer(1,3*mm)]
-    if oa.get('discount_guardrails'): story += [tag("DISCOUNT GUARDRAILS"), Paragraph(cl(oa.get('discount_guardrails','')), S['alert']), Spacer(1,3*mm)]
-
-    # S12 UNIT ECONOMICS
-    ue = safe_dict(data.get('unit_economics'))
-    story += sec_header(12, "Unit Economics")
-    mt = Table([[[Paragraph("TARGET CAC", S['label']), Paragraph(cl(str(ue.get('target_cac',''))), S['metric'])],
-        [Paragraph("BREAK-EVEN ROAS", S['label']), Paragraph(cl(str(ue.get('break_even_roas',''))), S['metric'])],
-        [Paragraph("RECOMMENDED AOV", S['label']), Paragraph(cl(str(ue.get('recommended_aov',''))), S['metric'])]]], colWidths=[W/3]*3)
-    mt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),BLACK),('BOX',(0,0),(-1,-1),1,ACCENT),
-        ('INNERGRID',(0,0),(-1,-1),0.5,ACCENT),('TOPPADDING',(0,0),(-1,-1),10),
-        ('BOTTOMPADDING',(0,0),(-1,-1),10),('LEFTPADDING',(0,0),(-1,-1),10)]))
-    story += [mt, Spacer(1,4*mm)]
-    roas = safe_dict(ue.get('realistic_roas_timeline'))
-    if roas:
-        story.append(tag("REALISTIC ROAS TIMELINE"))
-        for k, label in [('month_1_2_expectation','MONTH 1-2'),('month_3_4_expectation','MONTH 3-4'),('month_5_6_expectation','MONTH 5-6')]:
-            v = roas.get(k, '')
-            if v: story.append(Paragraph(f"<b>{label}:</b> {cl(v)}", S['body']))
-        story.append(Spacer(1,3*mm))
-    india = safe_dict(ue.get('india_specific_factors'))
-    if india and isinstance(india, dict): story += [tag("INDIA-SPECIFIC FACTORS"), kv_table([(k.replace('_',' ').upper(), str(v)) for k,v in india.items()]), Spacer(1,4*mm)]
-
-    # S13 CREATIVE TEST MATRIX
-    ctm = safe_dict(data.get('creative_test_matrix'))
-    story += sec_header(13, "Creative Test Matrix")
-    story += [kv_table([("TESTING BUDGET", ctm.get('testing_budget_percentage','')),
-        ("VALIDATION TIMELINE", ctm.get('validation_timeline','')),
-        ("WEEKLY VOLUME DURING TEST", ctm.get('weekly_creative_volume_during_test',''))]), Spacer(1,4*mm)]
-    for hyp_key in ['test_hypothesis_1','test_hypothesis_2','test_hypothesis_3']:
-        hyp = safe_dict(ctm.get(hyp_key))
-        if not isinstance(hyp, dict): continue
-        story.append(black_hdr(f"HYPOTHESIS {hyp_key.split('_')[-1]} — {cl(hyp.get('hook_angle',''))}"))
-        ht = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
-            [("FORMAT", hyp.get('ad_format','')),("AUDIENCE", hyp.get('target_audience','')),
-             ("BUDGET", hyp.get('budget_allocation_percentage','')),
-             ("SUCCESS METRIC", hyp.get('success_metric','')),("KILL CRITERIA", hyp.get('kill_criteria',''))]],
-            colWidths=[40*mm, 130*mm])
-        ht.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
-            ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
-            ('LEFTPADDING',(0,0),(-1,-1),8)]))
-        story += [ht, Spacer(1,3*mm)]
-
-    # S14 CREATIVE EXECUTION BRIEFS
-    ceb = safe_dict(data.get('creative_execution_briefs'))
-    story += sec_header(14, "Creative Execution Briefs")
-    story += [Paragraph("5 complete ready-to-shoot briefs. Execute on day one. No questions needed.", S['body']), Spacer(1,4*mm)]
-    for brief_key, brief in ceb.items():
-        if not isinstance(brief, dict): continue
-        story.append(black_hdr(f"BRIEF {brief.get('brief_number','?')} — {cl(brief.get('brief_name',''))}"))
-        top_t = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
-            [("OBJECTIVE", brief.get('objective','')),("FORMAT", brief.get('format','')),
-             ("AUDIO DIRECTION", brief.get('audio_direction','')),("THUMBNAIL", brief.get('thumbnail_description','')),
-             ("CTA & OFFER", brief.get('cta_and_offer','')),("PRODUCTION REQUIREMENTS", brief.get('production_requirements','')),
-             ("PRODUCTION COST", brief.get('production_cost_estimate',''))]],
-            colWidths=[42*mm, 128*mm])
-        top_t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
-            ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
-            ('LEFTPADDING',(0,0),(-1,-1),8)]))
-        story.append(top_t)
-        scene = brief.get('scene_breakdown', '')
-        if scene:
-            sh = Table([[Paragraph("SCENE BREAKDOWN", S['label'])]], colWidths=[W])
-            sh.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor("#1A1A1A")),
-                ('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),8)]))
-            st = Table([[Paragraph(cl(scene), S['scene'])]], colWidths=[W])
-            st.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor("#F0F0F0")),
-                ('BOX',(0,0),(-1,-1),0.3,BORDER),('TOPPADDING',(0,0),(-1,-1),8),
-                ('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),10)]))
-            story += [sh, st]
-        ost = brief.get('on_screen_text', '')
-        if ost:
-            oh = Table([[Paragraph("ON-SCREEN TEXT — IN ORDER", S['label'])]], colWidths=[W])
-            oh.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors.HexColor("#1A1A1A")),
-                ('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),8)]))
-            ot = Table([[Paragraph(cl(ost), S['body_bold'])]], colWidths=[W])
-            ot.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.5,ACCENT),
-                ('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),10)]))
-            story += [oh, ot]
-        story.append(Spacer(1,6*mm))
-
-    # S15 LANDING PAGE INTELLIGENCE
-    lp = safe_dict(data.get('landing_page_intelligence'))
-    story += sec_header(15, "Landing Page Intelligence")
-    for key, label in [('hero_section_strategy','HERO SECTION STRATEGY'),('offer_placement','OFFER PLACEMENT'),
-        ('mobile_optimization_factors','MOBILE OPTIMIZATION — INDIA')]:
-        v = lp.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
-    trust = lp.get('trust_signals_required', [])
-    if trust:
-        story.append(tag("REQUIRED TRUST SIGNALS"))
-        for t_item in trust: story.append(Paragraph(f"• {cl(str(t_item))}", S['bullet']))
-        story.append(Spacer(1,3*mm))
-    killers = lp.get('conversion_killers', [])
-    if killers:
-        story.append(tag("CONVERSION KILLERS"))
-        for killer in killers: story += [risk_box("KILL", killer), Spacer(1,2*mm)]
-    if lp.get('recommended_page_structure'): story += [tag("RECOMMENDED PAGE STRUCTURE"), Paragraph(cl(lp.get('recommended_page_structure','')), S['body'])]
-
-    # S16 LAUNCH RECOMMENDATIONS
-    lr = safe_dict(data.get('launch_recommendations'))
-    story += sec_header(16, "Launch Recommendations")
-    for phase_key, phase_label, phase_color in [
-        ('phase_1','PHASE 1 — DAYS 1-30', GREEN_OK),
-        ('phase_2','PHASE 2 — DAYS 31-60', ACCENT),
-        ('phase_3','PHASE 3 — DAYS 61-90+', colors.HexColor("#2980B9"))]:
-        phase = safe_dict(lr.get(phase_key))
-        if not isinstance(phase, dict): continue
-        story.append(black_hdr(phase_label, phase_color))
-        pt = Table([[Paragraph(cl(k), S['label']), Paragraph(cl(str(v)), S['body'])] for k,v in
-            [("BUDGET", phase.get('budget','')),("SUCCESS METRICS", phase.get('success_metrics',''))]],
-            colWidths=[35*mm, 135*mm])
-        pt.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),LIGHT_GRAY),('BOX',(0,0),(-1,-1),0.3,BORDER),
-            ('INNERGRID',(0,0),(-1,-1),0.3,BORDER),('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
-            ('LEFTPADDING',(0,0),(-1,-1),8)]))
-        story.append(pt)
-        for action in phase.get('actions', []): story.append(Paragraph(f"• {cl(str(action))}", S['bullet']))
-        story.append(Spacer(1,4*mm))
-
-    # S17 BUDGET DEPLOYMENT
-    bd = safe_dict(data.get('budget_deployment'))
-    story += sec_header(17, "Budget Deployment")
-    if bd.get('total_monthly_budget'): story += [tag("TOTAL MONTHLY BUDGET"), Paragraph(cl(bd.get('total_monthly_budget','')), S['metric']), Spacer(1,3*mm)]
-    for key, label in [('asc_campaign_structure','ASC CAMPAIGN STRUCTURE'),('creative_refresh_cadence','CREATIVE REFRESH CADENCE'),
-        ('scaling_triggers','SCALING TRIGGERS'),('scalability_ceiling','SCALABILITY CEILING')]:
-        v = bd.get(key, '')
-        if v: story += [tag(label), Paragraph(cl(v), S['body']), Spacer(1,3*mm)]
-    expected = safe_dict(bd.get('expected_metrics'))
-    if isinstance(expected, dict) and expected:
-        story += [tag("EXPECTED METRICS BY MONTH"), kv_table([(k.replace('_',' ').upper(), v) for k,v in expected.items()]), Spacer(1,4*mm)]
-
-    # S18 RISK FACTORS
-    rf = safe_dict(data.get('risk_factors'))
-    story += sec_header(18, "Risk Factors")
-    for key, label, color in [
-        ('competitive_response_risk','COMPETITIVE RESPONSE RISK', MID_GRAY),
-        ('creative_fatigue_timeline','CREATIVE FATIGUE TIMELINE', ACCENT),
-        ('pricing_war_risk','PRICING WAR RISK', MID_GRAY),
-        ('cod_rto_risk','COD / RTO RISK', RED_ALERT),
-        ('platform_policy_risk','PLATFORM POLICY RISK', ACCENT),
-        ('design_piracy_risk','DESIGN PIRACY RISK', RED_ALERT)]:
-        v = rf.get(key, '')
-        if v: story += [risk_box(label, v, color), Spacer(1,2*mm)]
+    try:
+        current_section = "S18 RISK FACTORS"
+        rf = safe_dict(data.get('risk_factors'))
+        story += sec_header(18, "Risk Factors")
+        for key, label, color in [
+            ('competitive_response_risk','COMPETITIVE RESPONSE RISK', MID_GRAY),
+            ('creative_fatigue_timeline','CREATIVE FATIGUE TIMELINE', ACCENT),
+            ('pricing_war_risk','PRICING WAR RISK', MID_GRAY),
+            ('cod_rto_risk','COD / RTO RISK', RED_ALERT),
+            ('platform_policy_risk','PLATFORM POLICY RISK', ACCENT),
+            ('design_piracy_risk','DESIGN PIRACY RISK', RED_ALERT)]:
+            v = rf.get(key, '')
+            if v: story += [risk_box(label, val_to_str(v), color), Spacer(1,2*mm)]
+        logger.info("build_pdf: S18 complete")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
     # FOOTER
-    story += [Spacer(1,8*mm), HRFlowable(width="100%", thickness=1, color=ACCENT), Spacer(1,3*mm),
-        Paragraph(f"Prepared by OffGrid Creatives AI  |  offgridcreativesai@gmail.com  |  {today}  |  Confidential  |  Version 3.0", S['footer'])]
+    try:
+        current_section = "FOOTER"
+        story += [Spacer(1,8*mm), HRFlowable(width="100%", thickness=1, color=ACCENT), Spacer(1,3*mm),
+            Paragraph(f"Prepared by OffGrid Creatives AI  |  offgridcreativesai@gmail.com  |  {today}  |  Confidential  |  Version 3.0", S['footer'])]
+        logger.info("build_pdf: FOOTER complete, building doc...")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
-    doc.build(story)
+    try:
+        current_section = "DOC BUILD"
+        doc.build(story)
+        logger.info("build_pdf: doc.build() SUCCESS")
+    except Exception as e:
+        logger.error(f"build_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
+        raise
 
 
-GMAIL_ADDRESS = "offgridcreativesai@gmail.com"
-GMAIL_APP_PASSWORD = "zxxoahpudmtyteeh"
+GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "offgridcreativesai@gmail.com")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
 
 @app.route('/generate-pdf', methods=['POST'])
@@ -524,9 +676,11 @@ def generate_pdf():
         }), 200
 
     except json.JSONDecodeError as e:
+        logger.error(f"/generate-pdf JSON parse error: {e}")
         return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"/generate-pdf CRASH: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 def build_report1_pdf(data, brand_name, brand_category, brand_market, output_file):
