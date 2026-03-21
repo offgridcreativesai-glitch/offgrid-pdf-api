@@ -22,6 +22,37 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
+def escape_literal_newlines_in_strings(json_str):
+    """Escape literal newline/tab/CR chars that appear inside JSON string values."""
+    result = []
+    in_string = False
+    i = 0
+    while i < len(json_str):
+        c = json_str[i]
+        if in_string:
+            if c == '\\':
+                result.append(c)
+                i += 1
+                if i < len(json_str):
+                    result.append(json_str[i])
+            elif c == '"':
+                in_string = False
+                result.append(c)
+            elif c == '\n':
+                result.append('\\n')
+            elif c == '\r':
+                result.append('\\r')
+            elif c == '\t':
+                result.append('\\t')
+            else:
+                result.append(c)
+        else:
+            if c == '"':
+                in_string = True
+            result.append(c)
+        i += 1
+    return ''.join(result)
+
 BLACK      = colors.HexColor("#0A0A0A")
 WHITE      = colors.white
 ACCENT     = colors.HexColor("#C8A96E")
@@ -643,6 +674,7 @@ def generate_pdf():
 
         # Sanitize control characters that break JSON parsing
         raw_json = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw_json)
+        raw_json = escape_literal_newlines_in_strings(raw_json)
 
         # Attempt JSON repair for common LLM output issues
         try:
@@ -1106,6 +1138,7 @@ def generate_report1_pdf():
         raw_json = re.sub(r'^```\s*', '', raw_json)
         raw_json = re.sub(r'\s*```$', '', raw_json)
         raw_json = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw_json)
+        raw_json = escape_literal_newlines_in_strings(raw_json)
 
         try:
             report_data = json.loads(raw_json)
