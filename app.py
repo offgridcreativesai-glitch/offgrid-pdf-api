@@ -1249,8 +1249,9 @@ def generate_hashtags():
         clean = [re.sub(r'[^a-z0-9]', '', h.lower()) for h in hashtags if isinstance(h, str)]
         clean = [h for h in clean if h]
 
+        apify_body = json.dumps({"hashtags": clean, "resultsLimit": 50, "resultsType": "posts"})
         logger.info(f"/generate-hashtags: category={category!r} → {clean}")
-        return jsonify({"hashtags": clean})
+        return jsonify({"hashtags": clean, "apify_body": apify_body})
 
     except Exception as e:
         logger.error(f"/generate-hashtags error: {e}\n{traceback.format_exc()}")
