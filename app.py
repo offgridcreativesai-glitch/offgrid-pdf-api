@@ -1200,6 +1200,63 @@ def generate_report1_pdf():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/generate-hashtags', methods=['POST'])
+def generate_hashtags():
+    import urllib.request as _urlreq
+    try:
+        body = request.get_json(force=True) or {}
+        category = body.get('category', '').strip()
+        if not category:
+            return jsonify({"error": "category is required"}), 400
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        if not api_key:
+            return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 500
+
+        prompt = (
+            "Generate 6-8 relevant Instagram hashtags for the brand category below. "
+            "Rules: lowercase, alphanumeric only, no spaces, no hyphens, no special characters, no hash symbol. "
+            "Return ONLY a raw JSON array. No markdown, no code fences, no explanation.\n\n"
+            f"Brand category: {category}"
+        )
+        payload = json.dumps({
+            "model": "claude-haiku-3-5-20241022",
+            "max_tokens": 200,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode('utf-8')
+
+        req = _urlreq.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01"
+            },
+            method="POST"
+        )
+        with _urlreq.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+
+        text = result['content'][0]['text'].strip()
+        text = text.replace('```json', '').replace('```', '').strip()
+        hashtags = json.loads(text)
+
+        if not isinstance(hashtags, list):
+            raise ValueError("Response was not a JSON array")
+
+        # Final sanitisation: lowercase, alphanumeric only, drop empties
+        clean = [re.sub(r'[^a-z0-9]', '', h.lower()) for h in hashtags if isinstance(h, str)]
+        clean = [h for h in clean if h]
+
+        logger.info(f"/generate-hashtags: category={category!r} → {clean}")
+        return jsonify({"hashtags": clean})
+
+    except Exception as e:
+        logger.error(f"/generate-hashtags error: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"}), 200
