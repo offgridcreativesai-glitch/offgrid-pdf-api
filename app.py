@@ -862,27 +862,54 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S3 Brand Positioning"
         bp = safe_dict(data.get('brand_positioning'))
         story += sec_header(3, "Brand Positioning")
-        pos_rows = []
-        for key, label in [
-            ('own_avg_engagement_rate',      'OWN ENGAGEMENT RATE'),
-            ('category_avg_engagement_rate', 'CATEGORY AVG ENGAGEMENT'),
-            ('engagement_gap',               'ENGAGEMENT GAP'),
-            ('own_dominant_format',          'OWN DOMINANT FORMAT'),
-            ('category_dominant_format',     'CATEGORY DOMINANT FORMAT'),
-            ('format_alignment',             'FORMAT ALIGNMENT'),
-            ('own_posting_frequency',        'OWN POSTING FREQUENCY'),
-            ('category_posting_frequency',   'CATEGORY POSTING FREQUENCY'),
-            ('frequency_gap',                'FREQUENCY GAP'),
-        ]:
-            v = bp.get(key,'')
-            if v: pos_rows.append((label, val_to_str(v)))
-        if pos_rows: story += [kv_table(pos_rows), Spacer(1,4*mm)]
-        if bp.get('content_overlap_with_category'):
-            story += [tag("CONTENT OVERLAP WITH CATEGORY"), Paragraph(cl(val_to_str(bp.get('content_overlap_with_category',''))), S['body']), Spacer(1,3*mm)]
-        if bp.get('whitespace_opportunity'):
-            story += [tag("WHITESPACE OPPORTUNITY"), Paragraph(cl(val_to_str(bp.get('whitespace_opportunity',''))), S['body']), Spacer(1,3*mm)]
-        if bp.get('one_line_brand_verdict'):
-            story += [tag("VERDICT"), hook_box(val_to_str(bp.get('one_line_brand_verdict',''))), Spacer(1,3*mm)]
+
+        # Detect zero / very few brand posts: own engagement rate missing, zero, or N/A
+        own_rate = val_to_str(bp.get('own_avg_engagement_rate', ''))
+        no_brand_posts = not own_rate or own_rate.strip().lower() in ('', '0', '0%', 'n/a', 'na', 'none', 'null', '-', '\u2013', '\u2014')
+
+        if no_brand_posts:
+            story += [
+                Paragraph(
+                    "No recent posts found on your profile. Post regularly for 2\u20133 weeks "
+                    "then rerun this report for your brand positioning analysis. "
+                    "Category benchmarks for reference:",
+                    S['body']
+                ),
+                Spacer(1, 4*mm)
+            ]
+            cat_rows = []
+            for key, label in [
+                ('category_avg_engagement_rate', 'CATEGORY AVG ENGAGEMENT'),
+                ('category_dominant_format',     'CATEGORY DOMINANT FORMAT'),
+                ('category_posting_frequency',   'CATEGORY POSTING FREQUENCY'),
+            ]:
+                v = bp.get(key, '')
+                if v: cat_rows.append((label, val_to_str(v)))
+            if cat_rows:
+                story += [kv_table(cat_rows), Spacer(1, 4*mm)]
+        else:
+            pos_rows = []
+            for key, label in [
+                ('own_avg_engagement_rate',      'OWN ENGAGEMENT RATE'),
+                ('category_avg_engagement_rate', 'CATEGORY AVG ENGAGEMENT'),
+                ('engagement_gap',               'ENGAGEMENT GAP'),
+                ('own_dominant_format',          'OWN DOMINANT FORMAT'),
+                ('category_dominant_format',     'CATEGORY DOMINANT FORMAT'),
+                ('format_alignment',             'FORMAT ALIGNMENT'),
+                ('own_posting_frequency',        'OWN POSTING FREQUENCY'),
+                ('category_posting_frequency',   'CATEGORY POSTING FREQUENCY'),
+                ('frequency_gap',                'FREQUENCY GAP'),
+            ]:
+                v = bp.get(key, '')
+                if v: pos_rows.append((label, val_to_str(v)))
+            if pos_rows: story += [kv_table(pos_rows), Spacer(1, 4*mm)]
+            if bp.get('content_overlap_with_category'):
+                story += [tag("CONTENT OVERLAP WITH CATEGORY"), Paragraph(cl(val_to_str(bp.get('content_overlap_with_category', ''))), S['body']), Spacer(1, 3*mm)]
+            if bp.get('whitespace_opportunity'):
+                story += [tag("WHITESPACE OPPORTUNITY"), Paragraph(cl(val_to_str(bp.get('whitespace_opportunity', ''))), S['body']), Spacer(1, 3*mm)]
+            if bp.get('one_line_brand_verdict'):
+                story += [tag("VERDICT"), hook_box(val_to_str(bp.get('one_line_brand_verdict', ''))), Spacer(1, 3*mm)]
+
         logger.info("build_report1_pdf: S3 OK")
     except Exception as e:
         logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
