@@ -1126,9 +1126,14 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
 @app.route('/generate-report1-pdf', methods=['POST'])
 def generate_report1_pdf():
     try:
-        body = request.get_json(force=True)
+        # Support both multipart/form-data (Make.com bodyParameters) and JSON body
+        content_type = request.content_type or ''
+        if 'multipart/form-data' in content_type or 'application/x-www-form-urlencoded' in content_type:
+            body = request.form.to_dict()
+        else:
+            body = request.get_json(force=True)
         if not body:
-            return jsonify({"error": "No JSON body received"}), 400
+            return jsonify({"error": "No body received"}), 400
 
         brand_name     = body.get('brand_name', 'Brand')
         brand_category = body.get('brand_category', 'D2C Brand')
