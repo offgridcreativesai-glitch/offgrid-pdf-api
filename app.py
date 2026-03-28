@@ -1123,10 +1123,147 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
     logger.info("build_report1_pdf() COMPLETED SUCCESSFULLY")
 
 
+def _extract_text_from_claude_r1(obj):
+    """Extract the raw JSON text string from a Claude API response object."""
+    original = obj
+    if isinstance(obj, str):
+        try: obj = json.loads(obj)
+        except: return original
+    if isinstance(obj, dict):
+        if 'content' in obj:
+            content_list = obj.get('content', [])
+            if content_list:
+                item = content_list[0]
+                if isinstance(item, dict): return item.get('text', '')
+                elif isinstance(item, str): return item
+        else:
+            return json.dumps(obj)
+    return ''
+
+
+def _parse_report1_body(body):
+    """
+    Parse the incoming request body and return (raw_json, brand_name, brand_category, brand_market, email).
+    Handles base64-encoded claude_response, raw Claude API objects, and report_json fallback.
+    """
+    brand_name     = body.get('brand_name', 'Brand')
+    brand_category = body.get('brand_category', 'D2C Brand')
+    brand_market   = body.get('brand_market', 'India')
+    email          = body.get('email', '')
+
+    raw_json = ''
+
+    claude_response = body.get('claude_response')
+    if claude_response:
+        if isinstance(claude_response, str):
+            # Try base64 decode first (Make.com sends base64(content[1].text))
+            try:
+                decoded = base64.b64decode(claude_response).decode('utf-8')
+                raw_json = decoded
+            except Exception:
+                raw_json = _extract_text_from_claude_r1(claude_response)
+        else:
+            raw_json = _extract_text_from_claude_r1(claude_response)
+
+    if not raw_json:
+        raw_json = body.get('report_json') or body.get('Report_json') or ''
+        if raw_json:
+            extracted = _extract_text_from_claude_r1(raw_json)
+            if extracted:
+                raw_json = extracted
+
+    # Strip markdown fences and control characters
+    raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
+    raw_json = re.sub(r'^```\s*', '', raw_json)
+    raw_json = re.sub(r'\s*```$', '', raw_json)
+    raw_json = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw_json)
+    raw_json = escape_literal_newlines_in_strings(raw_json)
+
+    return raw_json, brand_name, brand_category, brand_market, email
+
+
+def _build_report1_pdf_bytes(body):
+    """Parse body, build PDF, return (pdf_base64, filename). Raises on any error."""
+    raw_json, brand_name, brand_category, brand_market, _ = _parse_report1_body(body)
+
+    try:
+        report_data = json.loads(raw_json)
+    except json.JSONDecodeError:
+        match = re.search(r'\{.*\}', raw_json, re.DOTALL)
+        if match:
+            raw_json = match.group(0)
+        report_data = json.loads(raw_json)
+
+    if isinstance(report_data, str):
+        report_data = json.loads(report_data)
+
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+        output_path = f.name
+
+    build_report1_pdf(report_data, brand_name, brand_category, brand_market, output_path)
+
+    with open(output_path, 'rb') as f:
+        pdf_base64 = base64.b64encode(f.read()).decode('utf-8')
+    os.unlink(output_path)
+
+    filename = f"{brand_name.replace(' ', '_')}_SocialMediaReport.pdf"
+    return pdf_base64, filename, brand_name
+
+
+def _deliver_report1_background(body):
+    """
+    Background thread: build the PDF then POST pdf_base64 to the Make.com
+    delivery webhook (MAKE_WEBHOOK_URL). If that env var is not set, logs a
+    warning — the PDF was generated but not delivered.
+    """
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+
+    try:
+        _, _, _, _, email = _parse_report1_body(body)
+        pdf_base64, filename, brand_name = _build_report1_pdf_bytes(body)
+
+        webhook_url = os.environ.get('MAKE_WEBHOOK_URL', '').strip()
+        if not webhook_url:
+            logger.warning("MAKE_WEBHOOK_URL not set — PDF built but not delivered for %s", brand_name)
+            return
+
+        payload = json.dumps({
+            "pdf_base64": pdf_base64,
+            "filename": "Report.pdf",          # hardcoded — dynamic names cause BundleValidationError
+            "email": email,
+            "brand_name": brand_name
+        }).encode('utf-8')
+
+        req = _urlreq.Request(
+            webhook_url,
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        try:
+            with _urlreq.urlopen(req, timeout=30) as resp:
+                logger.info("Webhook delivered for %s — HTTP %s", brand_name, resp.status)
+        except _urlerr.HTTPError as e:
+            logger.error("Webhook HTTP error for %s: %s %s", brand_name, e.code, e.reason)
+        except Exception as e:
+            logger.error("Webhook delivery failed for %s: %s", brand_name, e)
+
+    except Exception as e:
+        logger.error("Background report1 processing failed: %s\n%s", e, traceback.format_exc())
+
+
 @app.route('/generate-report1-pdf', methods=['POST'])
 def generate_report1_pdf():
+    """
+    If MAKE_WEBHOOK_URL is set: immediately return {"status": "processing"} and
+    generate + deliver the PDF in a background thread via Make.com webhook.
+
+    If MAKE_WEBHOOK_URL is NOT set: synchronous mode — build PDF and return
+    pdf_base64 directly (legacy Make.com Module 7 flow still works).
+    """
     try:
-        # Support both multipart/form-data (Make.com bodyParameters) and JSON body
+        # Support both multipart/form-data and JSON body
         content_type = request.content_type or ''
         if 'multipart/form-data' in content_type or 'application/x-www-form-urlencoded' in content_type:
             body = request.form.to_dict()
@@ -1135,77 +1272,26 @@ def generate_report1_pdf():
         if not body:
             return jsonify({"error": "No body received"}), 400
 
-        brand_name     = body.get('brand_name', 'Brand')
-        brand_category = body.get('brand_category', 'D2C Brand')
-        brand_market   = body.get('brand_market', 'India')
+        webhook_url = os.environ.get('MAKE_WEBHOOK_URL', '').strip()
 
-        raw_json = ''
+        if webhook_url:
+            # --- ASYNC MODE: respond immediately, deliver via webhook ---
+            t = threading.Thread(target=_deliver_report1_background, args=(body,), daemon=True)
+            t.start()
+            return jsonify({"status": "processing"}), 200
 
-        def extract_text_from_claude(obj):
-            original = obj
-            if isinstance(obj, str):
-                try: obj = json.loads(obj)
-                except: return original
-            if isinstance(obj, dict):
-                if 'content' in obj:
-                    content_list = obj.get('content', [])
-                    if content_list:
-                        item = content_list[0]
-                        if isinstance(item, dict): return item.get('text', '')
-                        elif isinstance(item, str): return item
-                else: return json.dumps(obj)
-            return ''
+        else:
+            # --- SYNC MODE: build PDF and return base64 (legacy flow) ---
+            try:
+                pdf_base64, filename, _ = _build_report1_pdf_bytes(body)
+            except json.JSONDecodeError as e:
+                return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
 
-        claude_response = body.get('claude_response')
-        if claude_response:
-            # Try base64 decode first (Make.com sends base64(content[1].text))
-            if isinstance(claude_response, str):
-                try:
-                    decoded = base64.b64decode(claude_response).decode('utf-8')
-                    raw_json = decoded
-                except Exception:
-                    raw_json = extract_text_from_claude(claude_response)
-            else:
-                raw_json = extract_text_from_claude(claude_response)
-
-        if not raw_json:
-            raw_json = body.get('report_json') or body.get('Report_json') or ''
-            if raw_json:
-                extracted = extract_text_from_claude(raw_json)
-                if extracted: raw_json = extracted
-
-        raw_json = re.sub(r'^```json\s*', '', raw_json.strip())
-        raw_json = re.sub(r'^```\s*', '', raw_json)
-        raw_json = re.sub(r'\s*```$', '', raw_json)
-        raw_json = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw_json)
-        raw_json = escape_literal_newlines_in_strings(raw_json)
-
-        try:
-            report_data = json.loads(raw_json)
-        except json.JSONDecodeError:
-            match = re.search(r'\{.*\}', raw_json, re.DOTALL)
-            if match: raw_json = match.group(0)
-            report_data = json.loads(raw_json)
-
-        if isinstance(report_data, str):
-            report_data = json.loads(report_data)
-
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
-            output_path = f.name
-
-        build_report1_pdf(report_data, brand_name, brand_category, brand_market, output_path)
-
-        with open(output_path, 'rb') as f:
-            pdf_base64 = base64.b64encode(f.read()).decode('utf-8')
-
-        os.unlink(output_path)
-
-        filename = f"{brand_name.replace(' ', '_')}_SocialMediaReport.pdf"
-        return jsonify({
-            "status": "success",
-            "filename": filename,
-            "pdf_base64": pdf_base64
-        }), 200
+            return jsonify({
+                "status": "success",
+                "filename": filename,
+                "pdf_base64": pdf_base64
+            }), 200
 
     except json.JSONDecodeError as e:
         return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
