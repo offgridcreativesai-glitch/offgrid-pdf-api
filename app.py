@@ -671,9 +671,14 @@ def generate_pdf():
                     return json.dumps(obj)
             return ''
 
-        # Try claude_response key first
+        # Try claude_response key first (Make.com sends base64-encoded text)
         claude_response = body.get('claude_response')
-        if claude_response:
+        if claude_response and isinstance(claude_response, str):
+            try:
+                raw_json = base64.b64decode(claude_response).decode('utf-8')
+            except Exception:
+                raw_json = extract_text_from_claude(claude_response)
+        elif claude_response:
             raw_json = extract_text_from_claude(claude_response)
 
         # Fall back to Report_json / report_json
