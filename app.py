@@ -1051,9 +1051,22 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S8 What To Stop"
         s8 = data.get('what_to_stop', [])
         story += sec_header(8, "What To Stop")
-        story += [Paragraph("Content patterns from your own profile that underperform vs the category. Each finding is based on your actual post data.", S['alert']), Spacer(1,3*mm)]
+        story += [Paragraph("Patterns that underperform in this category. Stop these to immediately improve content effectiveness.", S['alert']), Spacer(1,3*mm)]
         for item in to_list(s8):
-            story += [risk_box("STOP", item, RED_ALERT), Spacer(1,2*mm)]
+            if isinstance(item, dict):
+                pattern    = val_to_str(item.get('pattern', ''))
+                reason     = val_to_str(item.get('reason', ''))
+                data_basis = val_to_str(item.get('data_basis', ''))
+                content = pattern if pattern else str(item)
+                if reason:
+                    content += f" — {reason}"
+                story += [risk_box("STOP", content, RED_ALERT), Spacer(1,1*mm)]
+                if data_basis and data_basis.lower() not in ('', 'none', 'null', 'n/a'):
+                    story += [Paragraph(f"<b>Data basis:</b> {cl(data_basis)}", S['body']), Spacer(1,3*mm)]
+                else:
+                    story.append(Spacer(1,2*mm))
+            else:
+                story += [risk_box("STOP", str(item), RED_ALERT), Spacer(1,2*mm)]
         logger.info("build_report1_pdf: S8 OK")
     except Exception as e:
         logger.error(f"build_report1_pdf CRASHED at {current_section}: {e}\n{traceback.format_exc()}")
@@ -1068,7 +1081,9 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         for action in to_list(s9):
             if not isinstance(action, dict): continue
             rank = action.get('rank', '')
-            color = GREEN_OK if rank == 1 else ACCENT if rank in (2, 3) else DARK_GRAY
+            try: rank_int = int(rank)
+            except (TypeError, ValueError): rank_int = 0
+            color = GREEN_OK if rank_int == 1 else ACCENT if rank_int in (2, 3) else DARK_GRAY
             action_text = val_to_str(action.get('action',''))
             story.append(black_hdr(f"ACTION {rank}: {cl(action_text)}", color))
             a_rows = []
