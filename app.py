@@ -1233,6 +1233,8 @@ def _parse_report1_body(body):
 def _build_report1_pdf_bytes(body):
     """Parse body, build PDF, return (pdf_base64, filename). Raises on any error."""
     raw_json, brand_name, brand_category, brand_market, _ = _parse_report1_body(body)
+    logger.info("Report1 request: brand_name=%r, brand_category=%r, brand_market=%r",
+                brand_name, brand_category, brand_market)
 
     try:
         report_data = json.loads(raw_json)
@@ -1244,6 +1246,16 @@ def _build_report1_pdf_bytes(body):
 
     if isinstance(report_data, str):
         report_data = json.loads(report_data)
+
+    # Quality gate: reject empty reports
+    landscape = report_data.get('category_landscape', {}) if isinstance(report_data, dict) else {}
+    posts_count = landscape.get('total_posts_analysed', 0)
+    try:
+        posts_count = int(posts_count)
+    except (TypeError, ValueError):
+        posts_count = 0
+    if posts_count == 0:
+        raise ValueError("Report rejected: 0 posts analysed. Apify scraper returned no data — check hashtag and scraper configuration.")
 
     with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
         output_path = f.name
