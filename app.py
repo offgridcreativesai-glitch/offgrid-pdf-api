@@ -1363,10 +1363,15 @@ def generate_report1_pdf():
 def generate_hashtags():
     import urllib.request as _urlreq
     try:
+        raw_data = request.get_data(as_text=True)
+        logger.info(f"/generate-hashtags raw body: {raw_data[:500]!r}")
+        logger.info(f"/generate-hashtags Content-Type: {request.content_type}")
         body = request.get_json(force=True) or {}
+        logger.info(f"/generate-hashtags parsed body keys: {list(body.keys())}")
         category = body.get('category', '').strip()
         if not category:
-            return jsonify({"error": "category is required"}), 400
+            logger.warning(f"/generate-hashtags: empty category, full body: {body}")
+            return jsonify({"error": "category is required", "received_body": body}), 400
 
         api_key = os.environ.get('ANTHROPIC_API_KEY', '')
         if not api_key:
