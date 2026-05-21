@@ -136,6 +136,22 @@ def black_hdr(text, left_color=ACCENT):
         ('LINEBEFORE',(0,0),(0,-1),4,left_color)]))
     return h
 
+def insight_box(text):
+    if not text or not isinstance(text, str) or text.strip().lower() in ('', 'none', 'null', 'n/a'):
+        return Spacer(1, 1)
+    W = 170*mm
+    INSIGHT_BG = colors.HexColor("#FFF8EC")
+    INSIGHT_LBL = ParagraphStyle('ILB', fontName='Helvetica-Bold', fontSize=7, textColor=ACCENT, spaceAfter=3)
+    INSIGHT_TXT = ParagraphStyle('ITX', fontName='Helvetica', fontSize=9, textColor=DARK_GRAY, leading=14)
+    rows = [[Paragraph("WHAT THIS MEANS FOR YOU", INSIGHT_LBL)],
+            [Paragraph(cl(text.strip()), INSIGHT_TXT)]]
+    t = Table(rows, colWidths=[W])
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),INSIGHT_BG),('BOX',(0,0),(-1,-1),0.5,ACCENT),
+        ('LINEBEFORE',(0,0),(0,-1),3,ACCENT),('TOPPADDING',(0,0),(-1,-1),7),
+        ('BOTTOMPADDING',(0,0),(-1,-1),7),('LEFTPADDING',(0,0),(-1,-1),12),
+        ('RIGHTPADDING',(0,0),(-1,-1),10)]))
+    return t
+
 def risk_box(title, content, color=RED_ALERT):
     W = 170*mm
     rs = ParagraphStyle('RS', fontName='Helvetica-Bold', fontSize=9, textColor=color)
@@ -747,6 +763,9 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
     posts_analysed   = landscape.get('total_posts_analysed', '')
     accounts_analysed = landscape.get('total_accounts_analysed', '')
 
+    # Plain-English summaries from Claude (may be absent in older responses)
+    summaries = safe_dict(data.get('summaries'))
+
     # ── COVER ──────────────────────────────────────────────────────────────────
     current_section = "COVER"
     try:
@@ -787,6 +806,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
     try:
         current_section = "S1 Category Landscape"
         story += sec_header(1, "Category Landscape")
+        story += [insight_box(summaries.get('category_landscape','')), Spacer(1,3*mm)]
         story += [conf_note(posts_analysed), Spacer(1,2*mm)]
         kv_rows = []
         if posts_analysed:   kv_rows.append(("POSTS ANALYSED",               str(posts_analysed)))
@@ -819,6 +839,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S2 Competitor Success Blueprint"
         csb = safe_dict(data.get('competitor_success_blueprint'))
         story += sec_header(2, "Competitor Success Blueprint")
+        story += [insight_box(summaries.get('competitor_success_blueprint','')), Spacer(1,3*mm)]
         story += [conf_note(posts_analysed), Spacer(1,2*mm)]
         for perf in to_list(csb.get('top_performers',[])):
             if not isinstance(perf, dict): continue
@@ -920,6 +941,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S4 Hook & Format Intelligence"
         hfi = safe_dict(data.get('hook_format_intelligence'))
         story += sec_header(4, "Hook & Format Intelligence")
+        story += [insight_box(summaries.get('hook_format_intelligence','')), Spacer(1,3*mm)]
         story += [conf_note(posts_analysed), Spacer(1,2*mm)]
         for h in to_list(hfi.get('top_3_hooks_by_engagement',[])):
             if not isinstance(h, dict): continue
@@ -957,6 +979,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S5 Audience Intelligence"
         ai_d = safe_dict(data.get('audience_intelligence'))
         story += sec_header(5, "Audience Intelligence")
+        story += [insight_box(summaries.get('audience_intelligence','')), Spacer(1,3*mm)]
         story += [conf_note(posts_analysed), Spacer(1,2*mm)]
         if ai_d.get('comment_sentiment_summary'):
             story += [tag("COMMENT SENTIMENT SUMMARY"), Paragraph(cl(val_to_str(ai_d.get('comment_sentiment_summary',''))), S['body']), Spacer(1,3*mm)]
@@ -987,6 +1010,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S6 Organic to Paid Bridge"
         otpb = safe_dict(data.get('organic_to_paid_bridge'))
         story += sec_header(6, "Organic to Paid Bridge")
+        story += [insight_box(summaries.get('organic_to_paid_bridge','')), Spacer(1,3*mm)]
         story += [Paragraph("Content structures with paid ad potential — based on format and engagement patterns from organic data only.", S['body']), Spacer(1,3*mm)]
         for fmt in to_list(otpb.get('organic_formats_with_paid_potential',[])):
             if not isinstance(fmt, dict): continue
@@ -1018,6 +1042,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S7 Content Execution Plan"
         cep = safe_dict(data.get('content_execution_plan'))
         story += sec_header(7, "Content Execution Plan")
+        story += [insight_box(summaries.get('content_execution_plan','')), Spacer(1,3*mm)]
         if cep.get('recommended_posting_frequency'):
             story += [tag("RECOMMENDED POSTING FREQUENCY"), Paragraph(cl(val_to_str(cep.get('recommended_posting_frequency',''))), S['body']), Spacer(1,3*mm)]
         if cep.get('recommended_format_split'):
@@ -1051,6 +1076,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S8 What To Stop"
         s8 = data.get('what_to_stop', [])
         story += sec_header(8, "What To Stop")
+        story += [insight_box(summaries.get('what_to_stop','')), Spacer(1,3*mm)]
         story += [Paragraph("Patterns that underperform in this category. Stop these to immediately improve content effectiveness.", S['alert']), Spacer(1,3*mm)]
         for item in to_list(s8):
             if isinstance(item, dict):
@@ -1077,6 +1103,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S9 Priority Action Plan"
         s9 = data.get('priority_action_plan', [])
         story += sec_header(9, "Priority Action Plan")
+        story += [insight_box(summaries.get('priority_action_plan','')), Spacer(1,3*mm)]
         story += [Paragraph("Ranked by impact. Every action traces back to a specific data observation.", S['body']), Spacer(1,3*mm)]
         for action in to_list(s9):
             if not isinstance(action, dict): continue
@@ -1106,6 +1133,7 @@ def build_report1_pdf(data, brand_name, brand_category, brand_market, output_fil
         current_section = "S10 Emerging Signals"
         es = safe_dict(data.get('emerging_signals'))
         story += sec_header(10, "Emerging Signals")
+        story += [insight_box(summaries.get('emerging_signals','')), Spacer(1,3*mm)]
         story += [Paragraph("Patterns from the most recent 30% of posts in category data — rising trends before they peak.", S['body']), Spacer(1,3*mm)]
         rf = to_list(es.get('rising_content_formats',[]))
         rt = to_list(es.get('rising_topics',[]))
