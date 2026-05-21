@@ -1421,7 +1421,9 @@ def generate_hashtags():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok"}), 200
+    key = os.environ.get('ANTHROPIC_API_KEY', '')
+    env_names = [k for k in os.environ if 'ANTH' in k.upper() or 'API' in k.upper() or 'KEY' in k.upper()]
+    return jsonify({"status": "ok", "api_key_set": bool(key), "api_key_length": len(key), "related_env_vars": env_names}), 200
 
 
 if __name__ == '__main__':
