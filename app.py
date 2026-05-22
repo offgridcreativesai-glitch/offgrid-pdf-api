@@ -1194,10 +1194,10 @@ def _parse_report1_body(body):
     Parse the incoming request body and return (raw_json, brand_name, brand_category, brand_market, email).
     Handles base64-encoded claude_response, raw Claude API objects, and report_json fallback.
     """
-    brand_name     = body.get('brand_name', 'Brand')
-    brand_category = body.get('brand_category', 'D2C Brand')
-    brand_market   = body.get('brand_market', 'India')
-    email          = body.get('email', '')
+    brand_name     = (body.get('brand_name') or '').strip() or 'Brand'
+    brand_category = (body.get('brand_category') or '').strip() or 'D2C Brand'
+    brand_market   = (body.get('brand_market') or '').strip() or 'India'
+    email          = (body.get('email') or '').strip()
 
     raw_json = ''
 
