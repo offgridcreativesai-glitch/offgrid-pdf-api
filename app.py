@@ -1391,18 +1391,37 @@ def generate_hashtags():
             "messages": [{"role": "user", "content": prompt}]
         }).encode('utf-8')
 
-        req = _urlreq.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01"
-            },
-            method="POST"
-        )
-        with _urlreq.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode('utf-8'))
+        import time as _time
+        import urllib.error as _urlerr
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+        result = None
+        last_err = None
+        for attempt in range(4):
+            req = _urlreq.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=payload,
+                headers=headers,
+                method="POST"
+            )
+            try:
+                with _urlreq.urlopen(req, timeout=30) as resp:
+                    result = json.loads(resp.read().decode('utf-8'))
+                break
+            except _urlerr.HTTPError as he:
+                last_err = he
+                if he.code in (429, 529) and attempt < 3:
+                    wait = (attempt + 1) * 3  # 3, 6, 9 seconds
+                    logger.warning(f"/generate-hashtags: API returned {he.code}, retrying in {wait}s (attempt {attempt+1}/4)")
+                    _time.sleep(wait)
+                    continue
+                raise
+        if result is None:
+            raise last_err or RuntimeError("API call failed after retries")
 
         text = result['content'][0]['text'].strip()
         text = text.replace('```json', '').replace('```', '').strip()
