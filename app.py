@@ -1247,7 +1247,7 @@ def _build_report1_pdf_bytes(body):
     if isinstance(report_data, str):
         report_data = json.loads(report_data)
 
-    # Quality gate: reject empty reports
+    # Quality gate: warn but allow low-data reports (hashtag scraper may return few posts)
     landscape = report_data.get('category_landscape', {}) if isinstance(report_data, dict) else {}
     posts_count = landscape.get('total_posts_analysed', 0)
     try:
@@ -1255,7 +1255,9 @@ def _build_report1_pdf_bytes(body):
     except (TypeError, ValueError):
         posts_count = 0
     if posts_count == 0:
-        raise ValueError("Report rejected: 0 posts analysed. Apify scraper returned no data — check hashtag and scraper configuration.")
+        logger.warning("Quality warning: 0 posts analysed in Claude response. Generating report anyway with available data.")
+    else:
+        logger.info(f"Quality gate passed: {posts_count} posts analysed")
 
     with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
         output_path = f.name
