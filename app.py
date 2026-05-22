@@ -1348,8 +1348,25 @@ def generate_report1_full():
         else:
             apify_data_raw = '[]'
 
-        logger.info("/generate-report1-full: brand=%r, category=%r, market=%r, apify_data_len=%d",
+        logger.info("/generate-report1-full: brand=%r, category=%r, market=%r, raw_apify_len=%d",
                      brand_name, brand_category, brand_market, len(apify_data_raw))
+
+        # Trim Apify data to only fields Claude needs (raw data can be 3MB+ with image URLs etc.)
+        KEEP_FIELDS = {'ownerUsername', 'likesCount', 'commentsCount', 'type', 'caption',
+                       'hashtags', 'timestamp', 'followersCount', 'ownerFullName',
+                       'shortCode', 'videoViewCount', 'videoDuration'}
+        try:
+            apify_posts = json.loads(apify_data_raw)
+            if isinstance(apify_posts, list):
+                trimmed = []
+                for post in apify_posts:
+                    if isinstance(post, dict):
+                        trimmed.append({k: post[k] for k in KEEP_FIELDS if k in post})
+                apify_data_raw = json.dumps(trimmed, ensure_ascii=False)
+                logger.info("/generate-report1-full: trimmed %d posts, data_len=%d",
+                             len(trimmed), len(apify_data_raw))
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("/generate-report1-full: could not parse Apify data for trimming: %s", e)
 
         # --- Call Claude API ---
         api_key = os.environ.get('ANTHROPIC_API_KEY', '')
