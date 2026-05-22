@@ -1315,6 +1315,179 @@ def _deliver_report1_background(body):
         logger.error("Background report1 processing failed: %s\n%s", e, traceback.format_exc())
 
 
+@app.route('/generate-report1-full', methods=['POST'])
+def generate_report1_full():
+    """
+    Combined endpoint: receives brand info + base64-encoded Apify data,
+    calls Claude API, generates PDF, returns base64 PDF.
+    This consolidates the Make.com Claude API call + PDF generation into one Railway call,
+    avoiding JSON escaping issues in Make.com's jsonStringBodyContent.
+    """
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+    import time as _time
+
+    try:
+        body = request.get_json(force=True)
+        if not body:
+            return jsonify({"error": "No body received"}), 400
+
+        brand_name     = (body.get('brand_name') or '').strip() or 'Brand'
+        brand_category = (body.get('brand_category') or '').strip() or 'D2C Brand'
+        brand_market   = (body.get('brand_market') or '').strip() or 'India'
+        email          = (body.get('email') or '').strip()
+        competitor_handles = (body.get('competitor_handles') or '').strip() or 'none provided'
+
+        # Decode base64-encoded Apify data
+        apify_data_b64 = body.get('apify_data', '')
+        if apify_data_b64:
+            try:
+                apify_data_raw = base64.b64decode(apify_data_b64).decode('utf-8')
+            except Exception:
+                apify_data_raw = apify_data_b64  # fallback: maybe it's already raw
+        else:
+            apify_data_raw = '[]'
+
+        logger.info("/generate-report1-full: brand=%r, category=%r, market=%r, apify_data_len=%d",
+                     brand_name, brand_category, brand_market, len(apify_data_raw))
+
+        # --- Call Claude API ---
+        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        if not api_key:
+            return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 500
+
+        system_prompt = (
+            "You are a social media intelligence analyst. Analyse the Instagram data provided and return ONLY valid JSON "
+            "following the EXACT schema below. Use ONLY numbers and facts present in the data. DO NOT invent, estimate, or "
+            "assume any metric not present in the data. If a field cannot be computed, use null. No preamble, no markdown, "
+            "no explanation. Start with { end with }.\n"
+            "DATA FORMAT: The CATEGORY_DATA is a raw JSON array of Instagram posts. Each post object has these key fields: "
+            "ownerUsername, likesCount, commentsCount, type (Image/Video/Sidecar), caption, hashtags (array), timestamp. "
+            "The followersCount field is NOT available from the hashtag scraper - when missing or 0, it means unavailable, "
+            "NOT zero followers. Do NOT exclude any posts. Include ALL posts in your analysis. Set total_posts_analysed to "
+            "the actual count of post objects in the array.\n"
+            "ENGAGEMENT RATE: When followersCount is 0 or unavailable, engagement rate cannot be calculated - set it to null. "
+            "Only calculate ER when followersCount > 0.\n"
+            "COMPETITOR INTELLIGENCE RULE: The client has provided competitor Instagram handles. Search through CATEGORY_DATA "
+            "for posts from these exact handles. If you find posts from a competitor handle, extract their hooks (first line of "
+            "caption), CTAs, hashtag strategy, content format, and posting patterns. If a competitor handle does NOT appear in "
+            "CATEGORY_DATA, set their fields to null and note: Competitor not found in category data.\n"
+            "BRAND DATA NOTE: Brand data is not available in this version. brand_positioning sections should be set to null with "
+            "note: Brand data will be available after Instagram account connection is set up.\n"
+            "SUMMARIES RULE: For the summaries object, write 2-3 plain-English sentences per key. Address the brand owner directly. "
+            "Use specific numbers, handles, and format names from the data. Each summary answers: what does this section mean for "
+            "their brand right now.\n"
+            "Do not use double quotes inside string values - use single quotes instead.\n"
+            'EXACT SCHEMA (use these exact key names only):\n'
+            '{"category_landscape":{"total_posts_analysed":"","total_accounts_analysed":"","avg_engagement_rate_category":"",'
+            '"top_engagement_rate_seen":"","lowest_engagement_rate_seen":"","dominant_content_format":"","avg_posting_frequency":"",'
+            '"most_active_posting_days":[],"most_active_posting_hours":[],"top_5_hashtags_by_frequency":[],"data_quality_note":""},'
+            '"competitor_success_blueprint":{"top_performers":[{"handle":"","follower_count":null,"avg_engagement_rate":null,'
+            '"posts_analysed":null,"dominant_format":"","hook_pattern":"","cta_pattern":"","hashtag_strategy":"",'
+            '"top_performing_caption_example":"","what_makes_them_win":""}],"common_patterns_across_top_performers":[],'
+            '"content_gaps_competitors_are_missing":[]},"brand_positioning":{"data_status":"Brand Instagram not yet connected - '
+            'coming in next version","own_avg_engagement_rate":null,"category_avg_engagement_rate":"","own_dominant_format":null,'
+            '"category_dominant_format":"","whitespace_opportunity":"","one_line_brand_verdict":null},"hook_format_intelligence":'
+            '{"top_3_hooks_by_engagement":[{"hook_text":"","hook_type":"","avg_engagement_on_posts_using_this_pattern":"",'
+            '"post_count_with_this_pattern":""}],"best_performing_format":"","worst_performing_format":"","optimal_caption_length":"",'
+            '"emoji_usage_pattern":"","cta_patterns_in_top_posts":[]},"audience_intelligence":{"comment_sentiment_summary":"",'
+            '"top_positive_triggers":[],"top_negative_triggers":[],"questions_audience_asks_repeatedly":[],'
+            '"purchase_intent_signals":[],"content_topics_that_drive_comments":[]},"organic_to_paid_bridge":'
+            '{"organic_formats_with_paid_potential":[{"format":"","reason":"","example_hook_structure":""}],'
+            '"hook_styles_that_stop_scroll":[],"content_angle_gaps_competitors_are_missing":[]},"content_execution_plan":'
+            '{"recommended_posting_frequency":"","recommended_format_split":"","week_1_focus":{"content_theme":"","hook_to_use":"",'
+            '"format":"","posting_days":[],"hashtag_set":[]},"week_2_focus":{"content_theme":"","hook_to_use":"","format":"",'
+            '"posting_days":[],"hashtag_set":[]},"week_3_focus":{"content_theme":"","hook_to_use":"","format":"","posting_days":[],'
+            '"hashtag_set":[]},"week_4_focus":{"content_theme":"","hook_to_use":"","format":"","posting_days":[],"hashtag_set":[]}},'
+            '"what_to_stop":[{"pattern":"","reason":"","data_basis":""}],"priority_action_plan":[{"rank":1,"action":"",'
+            '"data_basis":"","expected_outcome":"","effort":"","time_to_impact":""}],"emerging_signals":{"rising_content_formats":[],'
+            '"rising_topics":[],"rising_hashtags":[],"early_signal_note":""},"summaries":{"category_landscape":"",'
+            '"competitor_success_blueprint":"","hook_format_intelligence":"","audience_intelligence":"","organic_to_paid_bridge":"",'
+            '"content_execution_plan":"","what_to_stop":"","priority_action_plan":"","emerging_signals":""}}'
+        )
+
+        user_message = (
+            f"Brand: {brand_name}\n"
+            f"Category: {brand_category}\n"
+            f"Market: {brand_market}\n"
+            f"Competitor handles to find in data: {competitor_handles}\n\n"
+            f"INSTRUCTION: Analyse ALL posts in the CATEGORY_DATA JSON array below. "
+            f"Count them, extract patterns, find competitor handles if present. Do NOT skip any posts.\n\n"
+            f"CATEGORY_DATA (JSON array of Instagram posts):\n{apify_data_raw}"
+        )
+
+        claude_payload = json.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 16000,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_message}]
+        }).encode('utf-8')
+
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+
+        # Call Claude with retry logic
+        claude_result = None
+        last_err = None
+        for attempt in range(4):
+            req = _urlreq.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=claude_payload,
+                headers=headers,
+                method="POST"
+            )
+            try:
+                with _urlreq.urlopen(req, timeout=120) as resp:
+                    claude_result = json.loads(resp.read().decode('utf-8'))
+                break
+            except _urlerr.HTTPError as he:
+                last_err = he
+                if he.code in (429, 529) and attempt < 3:
+                    wait = (attempt + 1) * 5
+                    logger.warning("/generate-report1-full: Claude API %d, retrying in %ds (attempt %d/4)",
+                                   he.code, wait, attempt + 1)
+                    _time.sleep(wait)
+                    continue
+                err_body = he.read().decode('utf-8', errors='replace') if hasattr(he, 'read') else str(he)
+                logger.error("/generate-report1-full: Claude API error %d: %s", he.code, err_body[:500])
+                raise
+
+        if claude_result is None:
+            raise last_err or RuntimeError("Claude API call failed after retries")
+
+        # Extract the text response from Claude
+        claude_text = claude_result.get('content', [{}])[0].get('text', '').strip()
+        logger.info("/generate-report1-full: Claude response length=%d", len(claude_text))
+
+        # Build PDF using existing infrastructure
+        pdf_body = {
+            'claude_response': base64.b64encode(claude_text.encode('utf-8')).decode('utf-8'),
+            'brand_name': brand_name,
+            'brand_category': brand_category,
+            'brand_market': brand_market,
+            'email': email
+        }
+
+        try:
+            pdf_base64, filename, _ = _build_report1_pdf_bytes(pdf_body)
+        except json.JSONDecodeError as e:
+            logger.error("/generate-report1-full: PDF build JSON error: %s\nClaude text: %s", e, claude_text[:1000])
+            return jsonify({"error": f"Claude response was not valid JSON: {str(e)}", "claude_text_preview": claude_text[:500]}), 500
+
+        return jsonify({
+            "status": "success",
+            "filename": filename,
+            "pdf_base64": pdf_base64
+        }), 200
+
+    except Exception as e:
+        logger.error("/generate-report1-full error: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/generate-report1-pdf', methods=['POST'])
 def generate_report1_pdf():
     """
