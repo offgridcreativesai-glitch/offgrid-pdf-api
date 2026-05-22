@@ -1386,7 +1386,7 @@ def generate_hashtags():
             f"Brand category: {category}"
         )
         payload = json.dumps({
-            "model": "claude-3-5-haiku-20241022",
+            "model": "claude-sonnet-4-20250514",
             "max_tokens": 200,
             "messages": [{"role": "user", "content": prompt}]
         }).encode('utf-8')
