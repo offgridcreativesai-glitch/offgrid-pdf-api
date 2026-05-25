@@ -2334,7 +2334,7 @@ def build_agent_pdf(report_data, form_data, scraped_data):
         [Spacer(1, 4*mm)],
         [Paragraph(cl(brand_category), S['cover_sub'])],
         [Spacer(1, 3*mm)],
-        [Paragraph(f"Market: {target_market}  |  {today}  |  Version 5.0", S['cover_label'])],
+        [Paragraph(f"Market: {target_market}  |  {today}  |  Version 6.0", S['cover_label'])],
         [Spacer(1, 8*mm)],
         [HRFlowable(width=60*mm, thickness=0.5, color=ACCENT)],
         [Spacer(1, 8*mm)],
@@ -2536,6 +2536,9 @@ def build_agent_pdf(report_data, form_data, scraped_data):
         for acc in cat_data.get('top_accounts', []):
             handle = (acc.get('handle') or '').lower()
             if handle and handle not in already_in:
+                # Skip accounts with no real data (0 followers AND 0 likes)
+                if acc.get('followers', 0) == 0 and acc.get('avg_likes', 0) == 0:
+                    continue
                 leaderboard.append({
                     'handle': acc.get('handle', '?'), 'followers': acc.get('followers', 0),
                     'avg_likes': acc.get('avg_likes', 0), 'avg_er_pct': acc.get('avg_er_pct', 0),
@@ -2543,6 +2546,8 @@ def build_agent_pdf(report_data, form_data, scraped_data):
                 })
                 already_in.add(handle)
 
+    # Filter out any entries with no real data (0 followers AND 0 avg_likes AND 0 ER)
+    leaderboard = [a for a in leaderboard if a['source'] == 'brand' or a.get('followers', 0) > 0 or a.get('avg_likes', 0) > 0]
     leaderboard.sort(key=lambda x: x['avg_er_pct'], reverse=True)
     brand_rank = None
     for idx, acc in enumerate(leaderboard, 1):
@@ -2558,7 +2563,7 @@ def build_agent_pdf(report_data, form_data, scraped_data):
                 ParagraphStyle('RankText', fontName='Helvetica-Bold', fontSize=9, textColor=rank_color, spaceAfter=4))]
 
         lb_rows = []
-        for idx, acc in enumerate(leaderboard[:15], 1):  # Show top 15 max
+        for idx, acc in enumerate(leaderboard[:10], 1):  # Show top 10 max — fits one page
             handle_display = f"@{acc['handle']}"
             if acc['label'] == 'YOU': handle_display += " (YOU)"
             elif acc['label'] == 'COMP': handle_display += " *"
@@ -2596,13 +2601,16 @@ def build_agent_pdf(report_data, form_data, scraped_data):
         verdict = section.get('verdict', '')
         verdict_type = section.get('verdict_type', 'info')
 
+        # Every section starts on a fresh page
+        story.append(PageBreak())
+
         # Section header
-        story += [Spacer(1, 4*mm),
+        story += [Spacer(1, 2*mm),
             Paragraph(f"SECTION {i:02d}", S['sec_num']),
             Paragraph(cl(title), ParagraphStyle('ST2', fontName='Helvetica-Bold', fontSize=15,
                 textColor=BLACK, spaceAfter=4)),
             HRFlowable(width="100%", thickness=1.5, color=ACCENT),
-            Spacer(1, 4*mm)]
+            Spacer(1, 5*mm)]
 
         # Verdict box at top if provided
         if verdict and verdict.strip() not in ('', 'N/A', 'null', 'none'):
@@ -2640,11 +2648,7 @@ def build_agent_pdf(report_data, form_data, scraped_data):
                 formatted = _format_bold(cl(para))
                 story.append(Paragraph(formatted, CONTENT_STYLE))
 
-        story.append(Spacer(1, 4*mm))
-
-        # Add page break after every 2-3 sections to avoid overcrowding
-        if i in (3, 6, 8, 10):
-            story.append(PageBreak())
+        story.append(Spacer(1, 6*mm))
 
     # ════════════════════════════════════════════════════════════════════
     # TOP POSTS TABLE (from scraped data)
@@ -2678,13 +2682,13 @@ def build_agent_pdf(report_data, form_data, scraped_data):
     story += [Spacer(1, 8*mm),
         HRFlowable(width="100%", thickness=1, color=ACCENT),
         Spacer(1, 3*mm),
-        Paragraph(f"Prepared by OffGrid Creatives AI  |  offgridcreativesai@gmail.com  |  {today}  |  Confidential  |  Version 4.0", S['footer']),
+        Paragraph(f"Prepared by OffGrid Creatives AI  |  offgridcreativesai@gmail.com  |  {today}  |  Confidential  |  Version 6.0", S['footer']),
         Spacer(1, 2*mm),
         Paragraph(LEGAL, ParagraphStyle('FL', fontName='Helvetica', fontSize=6,
             textColor=MID_GRAY, alignment=TA_CENTER, leading=8))]
 
     doc.build(story)
-    logger.info("build_agent_pdf() COMPLETED — Version 4.0")
+    logger.info("build_agent_pdf() COMPLETED — Version 6.0")
 
     with open(tmp.name, 'rb') as f:
         pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
