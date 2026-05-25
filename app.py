@@ -6,9 +6,16 @@ import base64
 import threading
 import logging
 import traceback
+import time
+import uuid
+import hashlib
+import hmac
+import requests as http_requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
-load_dotenv()
-from flask import Flask, request, send_file, jsonify
+load_dotenv(override=True)
+from flask import Flask, request, send_file, jsonify, Response
+from flask_cors import CORS
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
@@ -18,6 +25,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.enums import TA_CENTER
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -1434,7 +1442,7 @@ def generate_report1_full():
         )
 
         claude_payload = json.dumps({
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-opus-4-6",
             "max_tokens": 16000,
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_message}]
@@ -1576,7 +1584,7 @@ def generate_hashtags():
             f"Brand category: {category}"
         )
         payload = json.dumps({
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-opus-4-6",
             "max_tokens": 200,
             "messages": [{"role": "user", "content": prompt}]
         }).encode('utf-8')
@@ -1640,6 +1648,1615 @@ def health():
     key = os.environ.get('ANTHROPIC_API_KEY', '')
     env_names = [k for k in os.environ if 'ANTH' in k.upper() or 'API' in k.upper() or 'KEY' in k.upper()]
     return jsonify({"status": "ok", "api_key_set": bool(key), "api_key_length": len(key), "related_env_vars": env_names}), 200
+
+
+
+# ════════════════════════════════════════════════════════════════════
+# MULTI-PLATFORM SCRAPING ENGINE
+# ════════════════════════════════════════════════════════════════════
+
+APIFY_ACTORS = {
+    'instagram': 'apify/instagram-profile-scraper',
+    'instagram_posts': 'apify/instagram-post-scraper',
+    'youtube': 'streamers/youtube-channel-scraper',
+    'linkedin': 'dev_fusion/Linkedin-Profile-Scraper',
+    'tiktok': 'clockworks/tiktok-profile-scraper',
+    'website': 'apify/website-content-crawler',
+}
+
+
+def apify_run_actor(actor_name, input_data, timeout_secs=120):
+    """Run an Apify actor and return the dataset items."""
+    token = os.environ.get('APIFY_TOKEN', '')
+    if not token:
+        return {'error': 'APIFY_TOKEN not set', 'platform': actor_name}
+
+    actor_id = actor_name.replace('/', '~')
+    run_url = f"https://api.apify.com/v2/acts/{actor_id}/runs?token={token}"
+
+    try:
+        resp = http_requests.post(run_url, json=input_data, timeout=30)
+        resp.raise_for_status()
+        run_data = resp.json()['data']
+        run_id = run_data['id']
+        dataset_id = run_data['defaultDatasetId']
+
+        deadline = time.time() + timeout_secs
+        while time.time() < deadline:
+            time.sleep(5)
+            status_resp = http_requests.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}?token={token}", timeout=15
+            )
+            status = status_resp.json()['data']['status']
+            if status == 'SUCCEEDED':
+                items_resp = http_requests.get(
+                    f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={token}", timeout=30
+                )
+                return items_resp.json()
+            if status in ('FAILED', 'ABORTED', 'TIMED-OUT'):
+                return {'error': f'Actor run {status}', 'run_id': run_id}
+
+        return {'error': 'Actor run timed out waiting', 'run_id': run_id}
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def scrape_instagram(handle, posts_limit=30):
+    """Scrape Instagram profile + recent posts (up to posts_limit)."""
+    handle = handle.lstrip('@').strip()
+    if not handle:
+        return None
+
+    # Get profile info
+    data = apify_run_actor(APIFY_ACTORS['instagram'], {
+        'usernames': [handle],
+        'resultsLimit': 1
+    }, timeout_secs=90)
+
+    if not isinstance(data, list) or len(data) == 0:
+        return {'platform': 'instagram', 'handle': handle, 'error': 'No data returned', 'raw': data}
+
+    profile = data[0]
+    posts = profile.get('latestPosts', [])
+    followers = profile.get('followersCount', 0)
+
+    # If profile scraper returned fewer posts than desired, supplement with post scraper
+    if len(posts) < posts_limit:
+        try:
+            extra = apify_run_actor(APIFY_ACTORS['instagram_posts'], {
+                'directUrls': [f"https://www.instagram.com/{handle}/"],
+                'resultsLimit': posts_limit
+            }, timeout_secs=120)
+            if isinstance(extra, list) and len(extra) > len(posts):
+                posts = extra
+                logger.info(f"[SCRAPE] Extended posts for @{handle}: {len(posts)} posts via post scraper")
+        except Exception as e:
+            logger.warning(f"[SCRAPE] Post scraper supplement failed for @{handle}: {e}")
+
+    post_count = len(posts)
+    total_likes = sum(p.get('likesCount', 0) for p in posts)
+    total_comments = sum(p.get('commentsCount', 0) for p in posts)
+    avg_er = ((total_likes + total_comments) / max(followers, 1) / max(post_count, 1)) * 100 if post_count > 0 else 0
+
+    # Smart format classification — Apify returns type='Video' for both Reels and regular videos.
+    # Use productType='clips' to identify Reels specifically. Also catch cases where
+    # type='Image' but videoUrl is present (misclassified video).
+    format_counts = {}
+    for p in posts:
+        raw_type = p.get('type', 'Unknown')
+        product_type = p.get('productType', '')
+        has_video = bool(p.get('videoUrl'))
+
+        if raw_type == 'Sidecar':
+            fmt = 'Carousel'
+        elif product_type == 'clips' or (raw_type == 'Video' and not product_type):
+            fmt = 'Reel'
+        elif has_video and raw_type == 'Image':
+            # Misclassified video — Apify sometimes returns type=Image for videos
+            fmt = 'Reel'
+        elif raw_type == 'Video' and product_type and product_type != 'clips':
+            fmt = 'Video'  # IGTV or other video type
+        elif raw_type == 'Image':
+            fmt = 'Image'
+        else:
+            fmt = raw_type
+        p['_classified_format'] = fmt  # Store for later use
+        format_counts[fmt] = format_counts.get(fmt, 0) + 1
+
+    # Calculate total video views (Reels views)
+    total_video_views = sum(p.get('videoViewCount', 0) for p in posts if p.get('videoViewCount'))
+    video_posts_with_views = sum(1 for p in posts if p.get('videoViewCount'))
+    avg_video_views = round(total_video_views / max(video_posts_with_views, 1)) if video_posts_with_views else 0
+
+    captions = [p.get('caption', '') or '' for p in posts]
+    hook_types = classify_hooks(captions)
+
+    # Calculate posting frequency (posts per week)
+    timestamps = [p.get('timestamp', '') for p in posts if p.get('timestamp')]
+    posting_freq = None
+    if len(timestamps) >= 2:
+        try:
+            from datetime import datetime as _dt
+            dates = sorted([_dt.fromisoformat(t.replace('Z', '+00:00')) for t in timestamps if t])
+            if len(dates) >= 2:
+                span_days = (dates[-1] - dates[0]).days or 1
+                posting_freq = round(len(dates) / (span_days / 7), 1)
+        except Exception:
+            pass
+
+    # Caption length analysis
+    caption_lengths = [len(c) for c in captions if c]
+    avg_caption_len = round(sum(caption_lengths) / max(len(caption_lengths), 1)) if caption_lengths else 0
+
+    # Hashtag analysis
+    all_hashtags = {}
+    for p in posts:
+        for ht in (p.get('hashtags') or []):
+            ht_lower = ht.lower().strip('#')
+            all_hashtags[ht_lower] = all_hashtags.get(ht_lower, 0) + 1
+    top_hashtags = sorted(all_hashtags.items(), key=lambda x: x[1], reverse=True)[:15]
+
+    return {
+        'platform': 'instagram',
+        'handle': handle,
+        'full_name': profile.get('fullName', ''),
+        'bio': profile.get('biography', ''),
+        'followers': followers,
+        'following': profile.get('followsCount', 0),
+        'total_posts': profile.get('postsCount', 0),
+        'verified': profile.get('verified', False),
+        'is_business': profile.get('isBusinessAccount', False),
+        'category': profile.get('businessCategoryName', ''),
+        'external_url': profile.get('externalUrl', ''),
+        'highlights_count': profile.get('highlightReelCount', 0),
+        'recent_posts_count': post_count,
+        'avg_likes': round(total_likes / max(post_count, 1), 1),
+        'avg_comments': round(total_comments / max(post_count, 1), 1),
+        'avg_er_pct': round(avg_er, 4),
+        'format_breakdown': format_counts,
+        'hook_analysis': hook_types,
+        'posting_frequency_per_week': posting_freq,
+        'avg_caption_length': avg_caption_len,
+        'top_hashtags': top_hashtags,
+        'avg_video_views': avg_video_views,
+        'total_video_views': total_video_views,
+        'top_posts': sorted(posts, key=lambda p: p.get('likesCount', 0), reverse=True)[:5],
+        'recent_posts': [{
+            'type': p.get('_classified_format', p.get('type', '')),
+            'likes': p.get('likesCount', 0),
+            'comments': p.get('commentsCount', 0),
+            'views': p.get('videoViewCount', 0),
+            'caption': (p.get('caption', '') or '')[:300],
+            'timestamp': p.get('timestamp', ''),
+            'hashtags': p.get('hashtags', []),
+        } for p in posts],
+    }
+
+
+def scrape_youtube(channel_url):
+    """Scrape YouTube channel data."""
+    if not channel_url or not channel_url.strip():
+        return None
+    channel_url = channel_url.strip()
+    if not channel_url.startswith('http'):
+        channel_url = f"https://www.youtube.com/@{channel_url}"
+    data = apify_run_actor(APIFY_ACTORS['youtube'], {
+        'channelUrls': [channel_url],
+        'maxResults': 10,
+        'maxResultsShorts': 5,
+    }, timeout_secs=120)
+    if isinstance(data, list) and len(data) > 0:
+        items = data
+        channel_info = items[0] if items else {}
+        return {
+            'platform': 'youtube',
+            'url': channel_url,
+            'data': items[:15],
+            'video_count': len(items),
+        }
+    return {'platform': 'youtube', 'url': channel_url, 'error': 'No data returned', 'raw': data}
+
+
+def scrape_linkedin(linkedin_url):
+    """Scrape LinkedIn profile/company data."""
+    if not linkedin_url or not linkedin_url.strip():
+        return None
+    linkedin_url = linkedin_url.strip()
+    if not linkedin_url.startswith('http'):
+        linkedin_url = f"https://www.linkedin.com/in/{linkedin_url}"
+    data = apify_run_actor(APIFY_ACTORS['linkedin'], {
+        'profileUrls': [linkedin_url],
+    }, timeout_secs=90)
+    if isinstance(data, list) and len(data) > 0:
+        return {
+            'platform': 'linkedin',
+            'url': linkedin_url,
+            'data': data[0],
+        }
+    return {'platform': 'linkedin', 'url': linkedin_url, 'error': 'No data returned', 'raw': data}
+
+
+def scrape_tiktok(handle):
+    """Scrape TikTok profile data."""
+    if not handle or not handle.strip():
+        return None
+    handle = handle.lstrip('@').strip()
+    data = apify_run_actor(APIFY_ACTORS['tiktok'], {
+        'profiles': [handle],
+        'resultsPerPage': 10,
+    }, timeout_secs=90)
+    if isinstance(data, list) and len(data) > 0:
+        return {
+            'platform': 'tiktok',
+            'handle': handle,
+            'data': data[:15],
+        }
+    return {'platform': 'tiktok', 'handle': handle, 'error': 'No data returned', 'raw': data}
+
+
+def scrape_website(url):
+    """Crawl and audit a website."""
+    if not url or not url.strip():
+        return None
+    url = url.strip()
+    if not url.startswith('http'):
+        url = f"https://{url}"
+    data = apify_run_actor(APIFY_ACTORS['website'], {
+        'startUrls': [{'url': url}],
+        'maxCrawlPages': 5,
+        'crawlerType': 'cheerio',
+    }, timeout_secs=90)
+    if isinstance(data, list) and len(data) > 0:
+        return {
+            'platform': 'website',
+            'url': url,
+            'pages_crawled': len(data),
+            'data': [{
+                'url': p.get('url', ''),
+                'title': p.get('metadata', {}).get('title', '') if isinstance(p.get('metadata'), dict) else '',
+                'description': p.get('metadata', {}).get('description', '') if isinstance(p.get('metadata'), dict) else '',
+                'text': (p.get('text', '') or '')[:2000],
+            } for p in data[:5]],
+        }
+    return {'platform': 'website', 'url': url, 'error': 'No data returned', 'raw': data}
+
+
+def classify_hooks(captions):
+    """Classify caption hooks into types based on first line patterns."""
+    types = {
+        'question': 0, 'curiosity': 0, 'philosophy': 0, 'story': 0,
+        'negative': 0, 'achievement': 0, 'contrarian': 0, 'direct_cta': 0,
+        'empathy': 0, 'authority': 0, 'other': 0
+    }
+    for cap in captions:
+        if not cap:
+            continue
+        first_line = cap.split('\n')[0].lower().strip()
+        if '?' in first_line:
+            types['question'] += 1
+        elif any(w in first_line for w in ['secret', 'hidden', 'nobody', 'most people', 'what if']):
+            types['curiosity'] += 1
+        elif any(w in first_line for w in ['stop', 'don\'t', 'never', 'warning', 'mistake']):
+            types['negative'] += 1
+        elif any(w in first_line for w in ['i was', 'my story', 'when i', 'years ago']):
+            types['story'] += 1
+        elif any(w in first_line for w in ['dm', 'book', 'click', 'link in bio', 'order now']):
+            types['direct_cta'] += 1
+        elif any(w in first_line for w in ['stuck', 'struggling', 'tired of', 'feeling']):
+            types['empathy'] += 1
+        elif any(w in first_line for w in ['✨', '🌙', '🔮', 'universe', 'energy', 'manifest']):
+            types['philosophy'] += 1
+        else:
+            types['other'] += 1
+    total = sum(types.values()) or 1
+    return {k: {'count': v, 'pct': round(v / total * 100, 1)} for k, v in types.items() if v > 0}
+
+
+def scrape_category_top_accounts(brand_category, max_accounts=25):
+    """
+    Scrape category hashtags to find top accounts in the niche.
+    Returns aggregated account stats from hashtag post data.
+    """
+    # Generate category hashtags using Claude
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return {'error': 'ANTHROPIC_API_KEY not set'}
+
+    import anthropic as _anthropic
+    prompt = (
+        "Generate 5 highly specific Instagram hashtags for the brand category below. "
+        "These should be hashtags that active creators/brands in this EXACT niche use regularly. "
+        "Rules: lowercase, alphanumeric only, no spaces, no hyphens, no special characters, no hash symbol. "
+        "Return ONLY a raw JSON array. No markdown, no code fences.\n\n"
+        f"Brand category: {brand_category}"
+    )
+    try:
+        _client = _anthropic.Anthropic(api_key=api_key)
+        _resp = _client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = _resp.content[0].text.strip().replace('```json', '').replace('```', '').strip()
+        hashtags = json.loads(text)
+        clean = [re.sub(r'[^a-z0-9]', '', h.lower()) for h in hashtags if isinstance(h, str)]
+        clean = [h for h in clean if h][:5]
+    except Exception as e:
+        logger.error(f"[CATEGORY] Hashtag generation failed: {e}")
+        return {'error': f'Hashtag generation failed: {e}'}
+
+    logger.info(f"[CATEGORY] Generated hashtags for '{brand_category}': {clean}")
+
+    # Scrape posts from category hashtags
+    hashtag_data = apify_run_actor('apify/instagram-hashtag-scraper', {
+        'hashtags': clean,
+        'resultsLimit': 100,
+        'resultsType': 'posts'
+    }, timeout_secs=180)
+
+    if not isinstance(hashtag_data, list) or len(hashtag_data) == 0:
+        return {'error': 'No hashtag data returned', 'hashtags': clean}
+
+    logger.info(f"[CATEGORY] Scraped {len(hashtag_data)} posts from hashtags")
+
+    # Aggregate by account
+    accounts = {}
+    for post in hashtag_data:
+        if not isinstance(post, dict):
+            continue
+        username = post.get('ownerUsername', '')
+        if not username:
+            continue
+        if username not in accounts:
+            accounts[username] = {
+                'handle': username,
+                'posts': [],
+                'total_likes': 0,
+                'total_comments': 0,
+                'followers': post.get('followersCount', 0) or 0,
+            }
+        acc = accounts[username]
+        likes = post.get('likesCount', 0) or 0
+        comments = post.get('commentsCount', 0) or 0
+        acc['posts'].append({
+            'likes': likes,
+            'comments': comments,
+            'type': post.get('type', ''),
+            'caption': (post.get('caption', '') or '')[:200],
+            'hashtags': post.get('hashtags', []),
+        })
+        acc['total_likes'] += likes
+        acc['total_comments'] += comments
+        # Update followers if we get a non-zero value
+        if (post.get('followersCount') or 0) > acc['followers']:
+            acc['followers'] = post['followersCount']
+
+    # Filter bots: min 500 followers or min 3 posts in data
+    filtered = {}
+    for username, acc in accounts.items():
+        post_count = len(acc['posts'])
+        followers = acc['followers']
+        if followers >= 1000 and post_count >= 3:
+            avg_likes = acc['total_likes'] / max(post_count, 1)
+            avg_comments = acc['total_comments'] / max(post_count, 1)
+            er = ((avg_likes + avg_comments) / max(followers, 1)) * 100 if followers > 0 else 0
+            # Skip if ER is suspiciously high (likely bot or engagement pod)
+            if er > 25:
+                continue
+            format_counts = {}
+            for p in acc['posts']:
+                raw_type = p.get('type', 'Unknown')
+                product_type = p.get('productType', '')
+                has_video = bool(p.get('videoUrl'))
+                if raw_type == 'Sidecar':
+                    fmt = 'Carousel'
+                elif product_type == 'clips' or (raw_type == 'Video' and not product_type):
+                    fmt = 'Reel'
+                elif has_video and raw_type == 'Image':
+                    fmt = 'Reel'
+                elif raw_type == 'Video' and product_type and product_type != 'clips':
+                    fmt = 'Video'
+                elif raw_type == 'Image':
+                    fmt = 'Image'
+                else:
+                    fmt = raw_type
+                format_counts[fmt] = format_counts.get(fmt, 0) + 1
+            filtered[username] = {
+                'handle': username,
+                'followers': followers,
+                'posts_in_data': post_count,
+                'avg_likes': round(avg_likes, 1),
+                'avg_comments': round(avg_comments, 1),
+                'avg_er_pct': round(er, 4),
+                'format_breakdown': format_counts,
+                'hook_analysis': classify_hooks([p.get('caption', '') for p in acc['posts']]),
+                'top_caption': max(acc['posts'], key=lambda p: p['likes']).get('caption', '') if acc['posts'] else '',
+            }
+
+    # Sort by engagement rate, take top N
+    sorted_accounts = sorted(filtered.values(), key=lambda x: x['avg_er_pct'], reverse=True)[:max_accounts]
+
+    # Calculate category benchmarks
+    all_ers = [a['avg_er_pct'] for a in sorted_accounts if a['avg_er_pct'] > 0]
+    all_followers = [a['followers'] for a in sorted_accounts if a['followers'] > 0]
+    category_avg_er = round(sum(all_ers) / max(len(all_ers), 1), 4) if all_ers else 0
+    category_median_followers = sorted(all_followers)[len(all_followers) // 2] if all_followers else 0
+
+    # Format breakdown across category
+    cat_formats = {}
+    for acc in sorted_accounts:
+        for fmt, cnt in acc.get('format_breakdown', {}).items():
+            cat_formats[fmt] = cat_formats.get(fmt, 0) + cnt
+    total_fmt = sum(cat_formats.values()) or 1
+    cat_format_pct = {k: round(v / total_fmt * 100, 1) for k, v in cat_formats.items()}
+
+    return {
+        'hashtags_used': clean,
+        'total_posts_scraped': len(hashtag_data),
+        'total_accounts_found': len(accounts),
+        'accounts_after_filter': len(filtered),
+        'top_accounts': sorted_accounts,
+        'category_benchmarks': {
+            'avg_engagement_rate': category_avg_er,
+            'median_followers': category_median_followers,
+            'dominant_formats': cat_format_pct,
+            'total_posts_analyzed': len(hashtag_data),
+        }
+    }
+
+
+def scrape_all_platforms(form_data):
+    """Scrape all platforms in parallel based on provided handles, plus category top accounts."""
+    results = {}
+    tasks = {}
+
+    with ThreadPoolExecutor(max_workers=7) as executor:
+        # Brand's own profiles (30 posts for brand)
+        if form_data.get('instagram_handle'):
+            tasks['brand_instagram'] = executor.submit(scrape_instagram, form_data['instagram_handle'], 30)
+        if form_data.get('youtube_channel'):
+            tasks['brand_youtube'] = executor.submit(scrape_youtube, form_data['youtube_channel'])
+        if form_data.get('linkedin_url'):
+            tasks['brand_linkedin'] = executor.submit(scrape_linkedin, form_data['linkedin_url'])
+        if form_data.get('tiktok_handle'):
+            # Only scrape TikTok for international markets (banned in India)
+            market = (form_data.get('target_market') or '').lower()
+            if market not in ('india',):
+                tasks['brand_tiktok'] = executor.submit(scrape_tiktok, form_data['tiktok_handle'])
+        if form_data.get('website_url'):
+            tasks['brand_website'] = executor.submit(scrape_website, form_data['website_url'])
+
+        # Competitor Instagram profiles (20 posts each)
+        for i, comp_handle in enumerate(form_data.get('competitor_handles', []), 1):
+            if comp_handle and comp_handle.strip():
+                tasks[f'competitor_{i}_instagram'] = executor.submit(scrape_instagram, comp_handle, 20)
+
+        # Category-wide scraping (top 25 accounts from hashtags)
+        if form_data.get('brand_category'):
+            tasks['category_data'] = executor.submit(
+                scrape_category_top_accounts, form_data['brand_category'], 25
+            )
+
+        for key, future in tasks.items():
+            try:
+                result = future.result(timeout=240)
+                if result is not None:
+                    results[key] = result
+            except Exception as e:
+                results[key] = {'error': str(e)}
+                logger.error(f"[SCRAPE] {key} failed: {e}")
+
+    # ── Phase 2: Auto-scrape top 3 category leaders as full profiles ──
+    cat_data = results.get('category_data')
+    if isinstance(cat_data, dict) and not cat_data.get('error'):
+        top_accounts = cat_data.get('top_accounts', [])
+        # Exclude any handles that are already scraped (brand or user-submitted competitors)
+        already_scraped = set()
+        brand_handle = (form_data.get('instagram_handle') or '').lstrip('@').strip().lower()
+        if brand_handle:
+            already_scraped.add(brand_handle)
+        for ch in form_data.get('competitor_handles', []):
+            if ch and ch.strip():
+                already_scraped.add(ch.strip().lstrip('@').lower())
+
+        leaders_to_scrape = []
+        for acc in top_accounts:
+            handle = (acc.get('handle') or '').lower()
+            # Only scrape leaders with meaningful following (1000+) to avoid micro-accounts
+            if handle and handle not in already_scraped and acc.get('followers', 0) >= 1000:
+                leaders_to_scrape.append(handle)
+            if len(leaders_to_scrape) >= 3:
+                break
+
+        if leaders_to_scrape:
+            logger.info(f"[SCRAPE] Auto-scraping top {len(leaders_to_scrape)} category leaders: {leaders_to_scrape}")
+            with ThreadPoolExecutor(max_workers=3) as executor2:
+                leader_tasks = {}
+                for i, lh in enumerate(leaders_to_scrape, 1):
+                    leader_tasks[f'category_leader_{i}_instagram'] = executor2.submit(scrape_instagram, lh, 20)
+                for key, future in leader_tasks.items():
+                    try:
+                        result = future.result(timeout=120)
+                        if result is not None and not result.get('error'):
+                            results[key] = result
+                            logger.info(f"[SCRAPE] Category leader scraped: @{result.get('handle')} — {result.get('followers',0):,} followers, {result.get('avg_er_pct',0)}% ER")
+                    except Exception as e:
+                        logger.warning(f"[SCRAPE] Category leader {key} failed: {e}")
+
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════
+# AGENT PDF BUILDER — Renders Claude's {title, content} sections
+# ════════════════════════════════════════════════════════════════════
+
+def build_agent_pdf(report_data, form_data, scraped_data):
+    """Build a professional branded PDF from Claude's analysis. Returns base64."""
+    tmp = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+    tmp.close()
+    W = 170*mm
+    today = datetime.now().strftime("%B %d, %Y")
+
+    doc = SimpleDocTemplate(tmp.name, pagesize=A4,
+        rightMargin=20*mm, leftMargin=20*mm, topMargin=18*mm, bottomMargin=18*mm)
+    story = []
+
+    brand_name = form_data.get('brand_name', 'Brand')
+    brand_category = form_data.get('brand_category', '')
+    target_market = form_data.get('target_market', '')
+
+    LEGAL = ("Legal notice: This report is based exclusively on publicly available social media data. "
+             "Save rates, reach, impressions, and conversion rates are AI estimates where marked. "
+             "No personally identifiable information has been collected or stored. For internal strategic use only.")
+
+    # ── PDF Styles ──
+    AMBER = colors.HexColor("#F39C12")
+    DEEP_RED = colors.HexColor("#E74C3C")
+    TEAL = colors.HexColor("#1ABC9C")
+    CONTENT_STYLE = ParagraphStyle('CONTENT', fontName='Helvetica', fontSize=9.5,
+        textColor=DARK_GRAY, leading=16, spaceAfter=6)
+    BULLET_STYLE = ParagraphStyle('CBULLET', fontName='Helvetica', fontSize=9.5,
+        textColor=DARK_GRAY, leading=16, spaceAfter=4, leftIndent=14, bulletIndent=0)
+    SUBHEAD_STYLE = ParagraphStyle('SUBHEAD', fontName='Helvetica-Bold', fontSize=10.5,
+        textColor=colors.HexColor("#222222"), leading=16, spaceAfter=4, spaceBefore=8)
+    METRIC_BIG = ParagraphStyle('MBIG', fontName='Helvetica-Bold', fontSize=20, textColor=ACCENT, alignment=TA_CENTER)
+    METRIC_LABEL = ParagraphStyle('MLAB', fontName='Helvetica', fontSize=7.5, textColor=MID_GRAY, alignment=TA_CENTER)
+    METRIC_SUB = ParagraphStyle('MSUB', fontName='Helvetica', fontSize=7, textColor=MID_GRAY, alignment=TA_CENTER)
+
+    def metric_card(value, label, sub_text='', bg=LIGHT_GRAY, val_color=ACCENT):
+        """Create a single metric card with large number + label."""
+        val_style = ParagraphStyle('MV', fontName='Helvetica-Bold', fontSize=18, textColor=val_color, alignment=TA_CENTER)
+        rows = [[Paragraph(cl(str(value)), val_style)], [Paragraph(cl(label), METRIC_LABEL)]]
+        if sub_text:
+            rows.append([Paragraph(cl(sub_text), METRIC_SUB)])
+        t = Table(rows, colWidths=[W/3 - 4*mm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), bg),
+            ('BOX', (0,0), (-1,-1), 0.5, BORDER),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ]))
+        return t
+
+    def score_color(er_pct, cat_avg=1.0):
+        """Return color based on ER vs category average."""
+        if er_pct >= cat_avg * 1.5:
+            return GREEN_OK
+        elif er_pct >= cat_avg * 0.7:
+            return AMBER
+        return DEEP_RED
+
+    def comparison_table(rows_data, headers=None):
+        """Create a professional comparison table."""
+        tbl_rows = []
+        if headers:
+            hdr_cells = [Paragraph(f"<b>{cl(h)}</b>", ParagraphStyle('TH', fontName='Helvetica-Bold',
+                fontSize=8, textColor=WHITE)) for h in headers]
+            tbl_rows.append(hdr_cells)
+        for row in rows_data:
+            tbl_rows.append([Paragraph(cl(str(c)), S['body']) for c in row])
+        cols = len(tbl_rows[0]) if tbl_rows else 3
+        col_w = W / cols
+        t = Table(tbl_rows, colWidths=[col_w] * cols)
+        style_cmds = [
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('TOPPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('LEFTPADDING', (0,0), (-1,-1), 8),
+            ('RIGHTPADDING', (0,0), (-1,-1), 8),
+            ('INNERGRID', (0,0), (-1,-1), 0.3, BORDER),
+            ('BOX', (0,0), (-1,-1), 0.5, BORDER),
+        ]
+        if headers:
+            style_cmds.append(('BACKGROUND', (0,0), (-1,0), BLACK))
+            style_cmds.append(('BACKGROUND', (0,1), (-1,-1), LIGHT_GRAY))
+        else:
+            style_cmds.append(('BACKGROUND', (0,0), (-1,-1), LIGHT_GRAY))
+        t.setStyle(TableStyle(style_cmds))
+        return t
+
+    def verdict_box(text, verdict_type='warning'):
+        """Create a colored verdict/insight box."""
+        bg_map = {'critical': colors.HexColor("#FDEDEC"), 'warning': colors.HexColor("#FEF9E7"),
+                  'positive': colors.HexColor("#EAFAF1"), 'info': colors.HexColor("#EBF5FB")}
+        border_map = {'critical': DEEP_RED, 'warning': AMBER, 'positive': GREEN_OK, 'info': colors.HexColor("#3498DB")}
+        bg = bg_map.get(verdict_type, bg_map['info'])
+        border = border_map.get(verdict_type, border_map['info'])
+        label_map = {'critical': 'CRITICAL', 'warning': 'ATTENTION', 'positive': 'STRENGTH', 'info': 'INSIGHT'}
+        lbl = label_map.get(verdict_type, 'INSIGHT')
+        lbl_style = ParagraphStyle('VL', fontName='Helvetica-Bold', fontSize=7, textColor=border, spaceAfter=3)
+        txt_style = ParagraphStyle('VT', fontName='Helvetica', fontSize=9, textColor=DARK_GRAY, leading=14)
+        rows = [[Paragraph(lbl, lbl_style)], [Paragraph(_format_bold(cl(text)), txt_style)]]
+        t = Table(rows, colWidths=[W])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), bg),
+            ('BOX', (0,0), (-1,-1), 0.5, border),
+            ('LINEBEFORE', (0,0), (0,-1), 3, border),
+            ('TOPPADDING', (0,0), (-1,-1), 7),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 7),
+            ('LEFTPADDING', (0,0), (-1,-1), 12),
+            ('RIGHTPADDING', (0,0), (-1,-1), 10),
+        ]))
+        return t
+
+    # ── Extract scraped data ──
+    brand_ig = scraped_data.get('brand_instagram', {})
+    category = scraped_data.get('category_data', {})
+    cat_bench = category.get('category_benchmarks', {}) if isinstance(category, dict) else {}
+    cat_avg_er = cat_bench.get('avg_engagement_rate', 0)
+
+    # Count sources
+    platforms_scraped = [k for k, v in scraped_data.items() if isinstance(v, dict) and not v.get('error')]
+    competitors_scraped = [k for k in platforms_scraped if k.startswith('competitor_')]
+    total_posts = brand_ig.get('recent_posts_count', 0)
+    cat_posts = cat_bench.get('total_posts_analyzed', 0)
+    cat_accounts = category.get('accounts_after_filter', 0) if isinstance(category, dict) else 0
+
+    # ════════════════════════════════════════════════════════════════════
+    # COVER PAGE
+    # ════════════════════════════════════════════════════════════════════
+    cover_rows = [
+        [Paragraph("SOCIAL MEDIA BRAND INTELLIGENCE REPORT", ParagraphStyle('CT', fontName='Helvetica-Bold', fontSize=10, textColor=ACCENT, alignment=TA_CENTER))],
+        [Spacer(1, 16*mm)],
+        [Paragraph(cl(brand_name.upper()), S['cover_brand'])],
+        [Spacer(1, 3*mm)],
+        [Paragraph(cl(brand_category), S['cover_sub'])],
+        [Spacer(1, 2*mm)],
+        [Paragraph(f"Market: {target_market}  |  {today}  |  Version 4.0", S['cover_label'])],
+        [Spacer(1, 5*mm)],
+        [Paragraph(f"Based on {total_posts + cat_posts} posts from {len(competitors_scraped) + cat_accounts} accounts",
+            ParagraphStyle('DS', fontName='Helvetica', fontSize=8, textColor=GREEN_OK, alignment=TA_CENTER))],
+        [Spacer(1, 4*mm)],
+        [HRFlowable(width=60*mm, thickness=0.5, color=ACCENT)],
+        [Spacer(1, 5*mm)],
+        [Paragraph("Multi-Platform Intelligence Report with Category Benchmarks",
+            ParagraphStyle('CV', fontName='Helvetica', fontSize=9, textColor=colors.HexColor("#CCCCCC"), alignment=TA_CENTER))],
+        [Spacer(1, 12*mm)],
+        [Paragraph("OffGrid Creatives AI", S['cover_og'])],
+        [Paragraph("offgridcreativesai@gmail.com", S['cover_label'])],
+        [Spacer(1, 6*mm)],
+        [Paragraph(LEGAL, ParagraphStyle('DL', fontName='Helvetica', fontSize=6.5,
+            textColor=colors.HexColor("#888888"), alignment=TA_CENTER, leading=9))],
+    ]
+    ct = Table(cover_rows, colWidths=[W])
+    ct.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), BLACK),
+        ('TOPPADDING', (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ('LEFTPADDING', (0,0), (-1,-1), 10),
+        ('RIGHTPADDING', (0,0), (-1,-1), 10),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+    ]))
+    story += [Spacer(1, 25*mm), ct, PageBreak()]
+
+    # ════════════════════════════════════════════════════════════════════
+    # EXECUTIVE SCORECARD PAGE
+    # ════════════════════════════════════════════════════════════════════
+    story += [Paragraph("EXECUTIVE SCORECARD", ParagraphStyle('ES', fontName='Helvetica-Bold', fontSize=14,
+        textColor=BLACK, spaceAfter=4)),
+        HRFlowable(width="100%", thickness=2, color=ACCENT), Spacer(1, 6*mm)]
+
+    if brand_ig and not brand_ig.get('error'):
+        brand_er = brand_ig.get('avg_er_pct', 0)
+        brand_er_color = score_color(brand_er, cat_avg_er) if cat_avg_er else ACCENT
+
+        # Top metric cards row
+        card_row = Table([[
+            metric_card(f"{brand_ig.get('followers', 0):,}", "FOLLOWERS", "Your Instagram", LIGHT_GRAY, ACCENT),
+            metric_card(f"{brand_er}%", "ENGAGEMENT RATE",
+                f"Category avg: {cat_avg_er}%" if cat_avg_er else "", LIGHT_GRAY, brand_er_color),
+            metric_card(f"{brand_ig.get('recent_posts_count', 0)}", "POSTS ANALYZED", "Live scraped data", LIGHT_GRAY, ACCENT),
+        ]], colWidths=[W/3, W/3, W/3])
+        card_row.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
+        story += [card_row, Spacer(1, 5*mm)]
+
+        # Posting frequency + format
+        freq = brand_ig.get('posting_frequency_per_week')
+        freq_text = f"{freq} posts/week" if freq else "N/A"
+        fmt = brand_ig.get('format_breakdown', {})
+        fmt_str = " | ".join([f"{k}: {v}" for k, v in fmt.items()]) if fmt else "N/A"
+        avg_views = brand_ig.get('avg_video_views', 0)
+        views_text = f"{avg_views:,} avg views/reel" if avg_views else "No Reels data"
+        story += [kv_table([
+            ("POSTING FREQUENCY", freq_text),
+            ("FORMAT BREAKDOWN", fmt_str),
+            ("REELS PERFORMANCE", views_text),
+            ("AVG CAPTION LENGTH", f"{brand_ig.get('avg_caption_length', 0)} chars"),
+            ("BIO", brand_ig.get('bio', 'N/A')[:150]),
+        ]), Spacer(1, 5*mm)]
+
+    # ── CATEGORY LEADERBOARD: Rank the brand against the entire niche ──
+    # Collect ALL accounts: brand + user-submitted competitors + category leaders + category top accounts
+    leaderboard = []
+
+    # Add brand
+    if brand_ig and not brand_ig.get('error'):
+        leaderboard.append({
+            'handle': brand_ig.get('handle', '?'),
+            'followers': brand_ig.get('followers', 0),
+            'avg_likes': brand_ig.get('avg_likes', 0),
+            'avg_er_pct': brand_ig.get('avg_er_pct', 0),
+            'fmt': brand_ig.get('format_breakdown', {}),
+            'label': 'YOU',
+            'source': 'brand',
+        })
+
+    # Add user-submitted competitors + auto-discovered category leaders (full profile data)
+    for key in sorted(scraped_data.keys()):
+        is_comp = key.startswith('competitor_') and key.endswith('_instagram')
+        is_leader = key.startswith('category_leader_') and key.endswith('_instagram')
+        if (is_comp or is_leader) and isinstance(scraped_data[key], dict) and not scraped_data[key].get('error'):
+            cd = scraped_data[key]
+            if cd.get('followers', 0) == 0 and cd.get('avg_likes', 0) == 0:
+                continue  # Skip empty profiles
+            leaderboard.append({
+                'handle': cd.get('handle', '?'),
+                'followers': cd.get('followers', 0),
+                'avg_likes': cd.get('avg_likes', 0),
+                'avg_er_pct': cd.get('avg_er_pct', 0),
+                'fmt': cd.get('format_breakdown', {}),
+                'label': 'LEADER' if is_leader else 'COMP',
+                'source': 'leader' if is_leader else 'competitor',
+            })
+
+    # Add remaining category top accounts (from hashtag data — lighter stats but broadens the picture)
+    cat_data = scraped_data.get('category_data')
+    already_in = {a['handle'].lower() for a in leaderboard}
+    if isinstance(cat_data, dict) and not cat_data.get('error'):
+        for acc in cat_data.get('top_accounts', []):
+            handle = (acc.get('handle') or '').lower()
+            if handle and handle not in already_in and acc.get('followers', 0) >= 500:
+                # Get dominant format from breakdown
+                fmt = acc.get('format_breakdown', {})
+                leaderboard.append({
+                    'handle': acc.get('handle', '?'),
+                    'followers': acc.get('followers', 0),
+                    'avg_likes': acc.get('avg_likes', 0),
+                    'avg_er_pct': acc.get('avg_er_pct', 0),
+                    'fmt': fmt,
+                    'label': '',
+                    'source': 'category',
+                })
+                already_in.add(handle)
+
+    # Sort by engagement rate (descending) and find brand's rank
+    leaderboard.sort(key=lambda x: x['avg_er_pct'], reverse=True)
+    brand_rank = None
+    for idx, acc in enumerate(leaderboard, 1):
+        if acc['source'] == 'brand':
+            brand_rank = idx
+            break
+
+    if leaderboard:
+        rank_text = f"Your brand ranks #{brand_rank} out of {len(leaderboard)} accounts in this category" if brand_rank else ""
+        story += [Paragraph("CATEGORY LEADERBOARD", SUBHEAD_STYLE)]
+        if rank_text:
+            story += [Paragraph(rank_text, ParagraphStyle('RankText', fontName='Helvetica-Bold', fontSize=9,
+                textColor=colors.HexColor('#CC3333') if brand_rank and brand_rank > len(leaderboard) * 0.5 else colors.HexColor('#228B22'),
+                spaceAfter=4))]
+
+        lb_rows = []
+        for idx, acc in enumerate(leaderboard, 1):
+            handle_display = f"@{acc['handle']}"
+            if acc['label'] == 'YOU':
+                handle_display += " (YOU)"
+            elif acc['label'] == 'COMP':
+                handle_display += " *"
+            elif acc['label'] == 'LEADER':
+                handle_display += " ★"
+            # Dominant format
+            fmt = acc.get('fmt', {})
+            top_fmt = max(fmt, key=fmt.get) if fmt else "—"
+            lb_rows.append([
+                str(idx),
+                handle_display,
+                f"{acc['followers']:,}",
+                f"{acc['avg_likes']}",
+                f"{acc['avg_er_pct']}%",
+                top_fmt,
+            ])
+        story += [comparison_table(lb_rows, ["#", "ACCOUNT", "FOLLOWERS", "AVG LIKES", "ENG. RATE", "TOP FORMAT"]),
+                  Spacer(1, 2*mm),
+                  Paragraph("★ = Auto-discovered category leader  |  * = Your submitted competitor", ParagraphStyle(
+                      'LegendStyle', fontName='Helvetica', fontSize=6, textColor=LIGHT_GRAY)),
+                  Spacer(1, 5*mm)]
+
+    # ── Category Benchmarks Summary ──
+    if cat_bench:
+        story += [Paragraph("CATEGORY BENCHMARKS", SUBHEAD_STYLE)]
+        cat_fmt = cat_bench.get('dominant_formats', {})
+        cat_fmt_str = " | ".join([f"{k}: {v}%" for k, v in cat_fmt.items()]) if cat_fmt else "N/A"
+        story += [kv_table([
+            ("CATEGORY AVG ENGAGEMENT", f"{cat_avg_er}%"),
+            ("MEDIAN FOLLOWERS", f"{cat_bench.get('median_followers', 0):,}"),
+            ("DOMINANT FORMATS", cat_fmt_str),
+            ("POSTS ANALYZED", str(cat_bench.get('total_posts_analyzed', 0))),
+            ("ACCOUNTS IN LEADERBOARD", str(len(leaderboard))),
+        ]), Spacer(1, 5*mm)]
+
+    story.append(PageBreak())
+
+    # ════════════════════════════════════════════════════════════════════
+    # CONTENT SECTIONS (from Claude analysis)
+    # ════════════════════════════════════════════════════════════════════
+    section_keys = [
+        'category_landscape', 'competitor_success_blueprint', 'brand_positioning',
+        'hook_format_intelligence', 'audience_intelligence', 'organic_to_paid_bridge',
+        'content_execution_plan', 'what_to_stop', 'priority_action_plan', 'emerging_signals',
+        'platform_expansion',
+    ]
+
+    for i, key in enumerate(section_keys, 1):
+        section = report_data.get(key, {})
+        if isinstance(section, str):
+            section = {'title': key.replace('_', ' ').title(), 'content': section}
+        if not isinstance(section, dict):
+            continue
+        title = section.get('title', key.replace('_', ' ').title())
+        content = section.get('content', '')
+        verdict = section.get('verdict', '')
+        verdict_type = section.get('verdict_type', 'info')
+
+        # Section header
+        story += [Spacer(1, 4*mm),
+            Paragraph(f"SECTION {i:02d}", S['sec_num']),
+            Paragraph(cl(title), ParagraphStyle('ST2', fontName='Helvetica-Bold', fontSize=15,
+                textColor=BLACK, spaceAfter=4)),
+            HRFlowable(width="100%", thickness=1.5, color=ACCENT),
+            Spacer(1, 4*mm)]
+
+        # Verdict box at top if provided
+        if verdict and verdict.strip() not in ('', 'N/A', 'null', 'none'):
+            story += [verdict_box(verdict, verdict_type), Spacer(1, 4*mm)]
+
+        if not content or content.strip() in ('', 'N/A', 'null', 'none'):
+            story.append(Paragraph("Data not available for this section.", CONTENT_STYLE))
+            story.append(Spacer(1, 4*mm))
+            continue
+
+        # Parse content into formatted paragraphs
+        paragraphs = content.split('\n')
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            # Sub-headers (lines starting with ##)
+            if para.startswith('## '):
+                story.append(Paragraph(_format_bold(cl(para[3:])), SUBHEAD_STYLE))
+            elif para.startswith('### '):
+                story.append(Paragraph(_format_bold(cl(para[4:])),
+                    ParagraphStyle('SH3', fontName='Helvetica-Bold', fontSize=9.5,
+                        textColor=DARK_GRAY, spaceAfter=3, spaceBefore=6)))
+            # Bullet points
+            elif para.startswith('- ') or para.startswith('* '):
+                bullet_text = _format_bold(cl(para[2:].strip()))
+                story.append(Paragraph(f"&bull; {bullet_text}", BULLET_STYLE))
+            # Numbered lists (handle 1. through 99.)
+            elif len(para) > 2 and para.split('.')[0].strip().isdigit() and para.index('.') < 4:
+                dot_idx = para.index('.')
+                num = para[:dot_idx]
+                bullet_text = _format_bold(cl(para[dot_idx+1:].strip()))
+                story.append(Paragraph(f"<b>{num}.</b> {bullet_text}", BULLET_STYLE))
+            else:
+                formatted = _format_bold(cl(para))
+                story.append(Paragraph(formatted, CONTENT_STYLE))
+
+        story.append(Spacer(1, 4*mm))
+
+        # Add page break after every 2-3 sections to avoid overcrowding
+        if i in (3, 6, 8, 10):
+            story.append(PageBreak())
+
+    # ════════════════════════════════════════════════════════════════════
+    # TOP POSTS TABLE (from scraped data)
+    # ════════════════════════════════════════════════════════════════════
+    if brand_ig and not brand_ig.get('error') and brand_ig.get('top_posts'):
+        story += [PageBreak(), Paragraph("APPENDIX: TOP PERFORMING POSTS", SUBHEAD_STYLE),
+                  HRFlowable(width="100%", thickness=1, color=ACCENT), Spacer(1, 4*mm)]
+        post_rows = []
+        for p in brand_ig['top_posts'][:5]:
+            cap = (p.get('caption', '') or '')[:100]
+            cap = cap.replace('\n', ' ')
+            # Use classified format if available, otherwise smart-classify inline
+            raw_type = p.get('_classified_format', p.get('type', 'Unknown'))
+            if raw_type == 'Sidecar':
+                raw_type = 'Carousel'
+            elif raw_type == 'Video' or (p.get('videoUrl') and raw_type == 'Image'):
+                raw_type = 'Reel' if p.get('productType') == 'clips' or not p.get('productType') else 'Video'
+            views = p.get('videoViewCount', 0)
+            views_str = f" ({views:,} views)" if views else ""
+            post_rows.append([
+                raw_type,
+                f"{p.get('likesCount', 0):,}{views_str}",
+                f"{p.get('commentsCount', 0):,}",
+                cl(cap) + "..." if len(cap) >= 100 else cl(cap),
+            ])
+        story += [comparison_table(post_rows, ["FORMAT", "LIKES", "COMMENTS", "CAPTION"]), Spacer(1, 6*mm)]
+
+    # ════════════════════════════════════════════════════════════════════
+    # FOOTER
+    # ════════════════════════════════════════════════════════════════════
+    story += [Spacer(1, 8*mm),
+        HRFlowable(width="100%", thickness=1, color=ACCENT),
+        Spacer(1, 3*mm),
+        Paragraph(f"Prepared by OffGrid Creatives AI  |  offgridcreativesai@gmail.com  |  {today}  |  Confidential  |  Version 4.0", S['footer']),
+        Spacer(1, 2*mm),
+        Paragraph(LEGAL, ParagraphStyle('FL', fontName='Helvetica', fontSize=6,
+            textColor=MID_GRAY, alignment=TA_CENTER, leading=8))]
+
+    doc.build(story)
+    logger.info("build_agent_pdf() COMPLETED — Version 4.0")
+
+    with open(tmp.name, 'rb') as f:
+        pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+    os.unlink(tmp.name)
+    return pdf_b64
+
+
+def _format_bold(text):
+    """Convert **bold** markers to ReportLab <b> tags."""
+    import re as _re
+    return _re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+
+
+# ════════════════════════════════════════════════════════════════════
+# AGENT ENDPOINT — Takes form data, scrapes, analyzes, generates PDF
+# ════════════════════════════════════════════════════════════════════
+
+@app.route('/agent-report', methods=['POST'])
+def agent_report():
+    """
+    Full agent pipeline V4:
+    1. Receive form data (brand details + handles)
+    2. Scrape all platforms + category top 25 in parallel via Apify
+    3. Send real scraped data to Claude for analysis (11 sections)
+    4. Generate branded PDF with visual design
+    5. Return base64 PDF
+    """
+    try:
+        body = request.get_json(force=True)
+        logger.info(f"[AGENT] V4 request for brand: {body.get('brand_name', 'unknown')}")
+
+        # Step 1: Extract form data
+        form_data = {
+            'brand_name': body.get('brand_name', ''),
+            'brand_category': body.get('brand_category', ''),
+            'brand_description': body.get('brand_description', ''),
+            'target_market': body.get('target_market', ''),
+            'report_type': body.get('report_type', 'Brand Audit + Competitor Research'),
+            'instagram_handle': body.get('instagram_handle', ''),
+            'youtube_channel': body.get('youtube_channel', ''),
+            'linkedin_url': body.get('linkedin_url', ''),
+            'tiktok_handle': body.get('tiktok_handle', ''),
+            'website_url': body.get('website_url', ''),
+            'competitor_handles': [
+                body.get('competitor_1', ''),
+                body.get('competitor_2', ''),
+                body.get('competitor_3', ''),
+            ],
+            'full_name': body.get('full_name', ''),
+            'email': body.get('email', ''),
+            'whatsapp': body.get('whatsapp', ''),
+        }
+
+        # Step 2: Scrape all platforms + category data in parallel
+        logger.info(f"[AGENT] Starting multi-platform + category scrape for {form_data['brand_name']}")
+        scraped_data = scrape_all_platforms(form_data)
+        logger.info(f"[AGENT] Scraping complete. Sources: {list(scraped_data.keys())}")
+
+        # Step 3: Build Claude prompt with REAL data only
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+        scraped_json = json.dumps(scraped_data, indent=2, default=str)
+        # Trim if too large
+        if len(scraped_json) > 100000:
+            scraped_json = scraped_json[:100000] + "\n... [trimmed for length]"
+
+        # TikTok inclusion depends on market
+        target_mkt = (form_data.get('target_market') or '').lower()
+        tiktok_note = ""
+        if target_mkt in ('india',):
+            tiktok_note = "TikTok is BANNED in India. Do NOT recommend TikTok in platform expansion."
+        else:
+            tiktok_note = "TikTok is available in this market. Include it in platform expansion if relevant."
+
+        system_prompt = f"""You are a senior brand intelligence strategist at OffGrid Creatives AI.
+You write brutally honest, data-backed brand audit reports that justify a Rs.6,999 / $179 price tag.
+You think like a founder-advisor, not a generic marketing AI. Your advice must motivate the brand owner to take action.
+
+ABSOLUTE RULES — BREAK ANY AND THE REPORT IS WORTHLESS:
+
+1. DATA-FIRST: EVERY paragraph must cite specific numbers from the scraped data. Example: "Your **52,254 followers** generate an average of **14.6 likes** per post — a **0.03% engagement rate**, which is 40x below the category average of **1.2%**."
+
+2. BAN GENERIC: NEVER write these phrases: "post consistently", "engage with your audience", "leverage trends", "increase engagement", "create quality content", "build a community". Instead write: "Post 4x/week (you currently post 1.5x). Focus on Reels — your competitors get **3.2x more engagement** on Reels than static posts."
+
+3. CATEGORY-FIRST COMPARISON: This is a CATEGORY intelligence report, NOT a "you vs one competitor" report. The primary comparison is ALWAYS brand vs the entire category. The scraped data contains:
+   - category_data.top_accounts: ranked list of top accounts in this niche with their real stats
+   - category_leader_*_instagram: full profile scrapes of the top 3 category leaders (deep data)
+   - competitor_*_instagram: user-submitted competitors (secondary reference only)
+   Reference at least 5+ category accounts by @handle in every section. Show where the brand ranks among ALL accounts, not just named competitors.
+
+4. NO FABRICATION: Only use numbers from the scraped data. If data is missing, say: "[Data point] not available."
+
+5. MOTIVATE THE OWNER: End sections with what winning looks like. "If you match the category leaders' posting frequency, at your current follower base, you could expect roughly **X likes per post** based on category ER benchmarks."
+
+6. USE ALL DATA SOURCES: The scraped data includes category_data (top 25 accounts from hashtag scraping), category_leader profiles (full scrapes of top 3), and user-submitted competitors. Weave ALL of them into your analysis. Name specific accounts by @handle with their real numbers. The category leaders are your PRIMARY examples of what winning looks like — they were auto-discovered from real hashtag data, not hand-picked by the user.
+
+7. SPECIFICITY: When recommending content, describe the exact hook, format, and topic. Not "create educational content" but "Create a 15-second Reel with a curiosity hook like 'The one thing nobody tells you about [topic]' — this hook type achieves **2.8x avg engagement** in your category."
+
+8. EACH SECTION: 200-400 words. Write paragraphs, not walls of text. Use line breaks. Use bullet points for action items only.
+
+{tiktok_note}
+
+FORMAT:
+- Use **text** for bold (key numbers, handles, verdicts)
+- Use - for bullet point lists (action items only)
+- Use ## for sub-headers within sections
+- Use line breaks between paragraphs
+
+Return a JSON object with exactly 11 sections. Each section has:
+- "title" (string) — section title
+- "content" (string) — full multi-paragraph analysis
+- "verdict" (string) — one-sentence key takeaway for this section
+- "verdict_type" (string) — one of: "critical", "warning", "positive", "info"
+
+JSON SCHEMA:
+{{
+  "category_landscape": {{"title": "Where You Stand Right Now", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "competitor_success_blueprint": {{"title": "Who Is Winning In Your Space & Why", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "brand_positioning": {{"title": "Your Brand vs The Market Reality", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "hook_format_intelligence": {{"title": "What Stops The Scroll (And What Doesnt)", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "audience_intelligence": {{"title": "Who Is Actually Watching & What They Want", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "organic_to_paid_bridge": {{"title": "Content Ready To Become Paid Ads", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "content_execution_plan": {{"title": "Your Exact 30-Day Content Playbook", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "what_to_stop": {{"title": "Stop These Immediately", "content": "...", "verdict": "...", "verdict_type": "critical"}},
+  "priority_action_plan": {{"title": "5 Priority Actions Ranked By Impact", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "emerging_signals": {{"title": "Trends & Opportunities Before They Peak", "content": "...", "verdict": "...", "verdict_type": "info"}},
+  "platform_expansion": {{"title": "New Channels You Should Be On", "content": "...", "verdict": "...", "verdict_type": "info"}}
+}}
+
+PLATFORM EXPANSION SECTION RULES:
+- Only recommend platforms the brand is NOT already on
+- If they have no YouTube, explain what YouTube content works in their category with real examples
+- If they have no LinkedIn, explain the B2B or thought-leadership angle
+- If they have a weak website, give specific improvement points from the website audit data
+- Each platform recommendation must include: WHY, WHAT content type, HOW OFTEN, EXPECTED IMPACT
+- {tiktok_note}
+
+Return ONLY valid JSON. No markdown fences. No preamble. Start with {{ end with }}."""
+
+        user_prompt = f"""BRAND: {form_data['brand_name']}
+CATEGORY: {form_data['brand_category']}
+DESCRIPTION: {form_data['brand_description']}
+TARGET MARKET: {form_data['target_market']}
+REPORT TYPE: {form_data['report_type']}
+
+=== REAL SCRAPED DATA (scraped live via Apify right now — NOT cached, NOT estimated) ===
+
+{scraped_json}
+
+=== END OF SCRAPED DATA ===
+
+INSTRUCTIONS:
+1. This is a CATEGORY intelligence report. The scraped data includes: brand profile, category_data (top 25 accounts from hashtag scraping), category_leader_*_instagram (full profile scrapes of top 3 leaders), and competitor_*_instagram (user-submitted competitors)
+2. CATEGORY LEADERS are your PRIMARY comparison — these are the top accounts auto-discovered from real hashtag data. Reference them by @handle throughout
+3. The category_data.category_benchmarks gives you the real category averages — use these as benchmarks
+4. The category_data.top_accounts array has the top 25 performers — reference at least 5+ by handle across the report
+5. Compare: brand ER vs category leader ERs vs category avg ER vs user-submitted competitors (in that order of importance)
+6. Every recommendation must have a data-backed reason from a REAL account doing it successfully
+7. Minimum 200 words per section — this is a premium report
+8. Write like a strategist talking to a founder who needs to understand WHERE THEY RANK in the whole category
+9. The platform_expansion section should recommend channels the brand is NOT on yet
+10. User-submitted competitors are secondary — they may have empty data. Focus on what the CATEGORY data reveals"""
+
+        logger.info(f"[AGENT] Sending {len(scraped_json)} chars of scraped data to Claude")
+
+        claude_response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=16000,
+            messages=[{"role": "user", "content": user_prompt}],
+            system=system_prompt,
+        )
+
+        response_text = claude_response.content[0].text
+        logger.info(f"[AGENT] Claude response received: {len(response_text)} chars")
+
+        # Parse Claude's JSON response
+        response_text = escape_literal_newlines_in_strings(response_text)
+        response_text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', response_text)
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group()
+        report_data = json.loads(response_text)
+
+        # Step 4: Generate PDF using V4 agent PDF builder
+        logger.info(f"[AGENT] Generating V4 PDF for {form_data['brand_name']}")
+        pdf_base64 = build_agent_pdf(report_data, form_data, scraped_data)
+
+        return jsonify({
+            'status': 'success',
+            'brand': form_data['brand_name'],
+            'platforms_scraped': list(scraped_data.keys()),
+            'sections': len(report_data),
+            'pdf_base64': pdf_base64,
+            'scraped_summary': {
+                k: {
+                    'platform': v.get('platform', '') if isinstance(v, dict) else '',
+                    'followers': v.get('followers', '') if isinstance(v, dict) else '',
+                    'avg_er_pct': v.get('avg_er_pct', '') if isinstance(v, dict) else '',
+                    'error': v.get('error', '') if isinstance(v, dict) else '',
+                } for k, v in scraped_data.items() if isinstance(v, dict)
+            }
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[AGENT] Error: {traceback.format_exc()}")
+        return jsonify({'status': 'error', 'message': str(e), 'trace': traceback.format_exc()}), 500
+
+
+@app.route('/agent-scrape-only', methods=['POST'])
+def agent_scrape_only():
+    """Scrape all platforms and return raw data — for frontend live preview."""
+    try:
+        body = request.get_json(force=True)
+        form_data = {
+            'brand_name': body.get('brand_name', ''),
+            'instagram_handle': body.get('instagram_handle', ''),
+            'youtube_channel': body.get('youtube_channel', ''),
+            'linkedin_url': body.get('linkedin_url', ''),
+            'tiktok_handle': body.get('tiktok_handle', ''),
+            'website_url': body.get('website_url', ''),
+            'competitor_handles': [
+                body.get('competitor_1', ''),
+                body.get('competitor_2', ''),
+                body.get('competitor_3', ''),
+            ],
+        }
+        scraped_data = scrape_all_platforms(form_data)
+        return jsonify({'status': 'success', 'data': scraped_data}), 200
+    except Exception as e:
+        logger.error(f"[AGENT-SCRAPE] Error: {traceback.format_exc()}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════
+# RAZORPAY PAYMENT INTEGRATION
+# ════════════════════════════════════════════════════════════════════
+
+RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', 'rzp_test_placeholder')
+RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '')
+
+# Pricing in paise (1 INR = 100 paise)
+PRICING = {
+    'early_access': 250000,   # Rs. 2,500
+    'standard': 699900,       # Rs. 6,999
+    'agency': 2400000,        # Rs. 24,000
+}
+
+
+@app.route('/create-order', methods=['POST'])
+def create_order():
+    """Create a Razorpay order for payment."""
+    try:
+        body = request.get_json(force=True)
+        plan = body.get('plan', 'standard')
+        amount = PRICING.get(plan, PRICING['standard'])
+
+        if not RAZORPAY_KEY_SECRET:
+            return jsonify({'status': 'error', 'message': 'Razorpay not configured'}), 500
+
+        import razorpay
+        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        order = client.order.create({
+            'amount': amount,
+            'currency': 'INR',
+            'receipt': f'offgrid_{uuid.uuid4().hex[:12]}',
+            'notes': {
+                'brand_name': body.get('brand_name', ''),
+                'email': body.get('email', ''),
+                'plan': plan,
+            }
+        })
+
+        return jsonify({
+            'status': 'success',
+            'order_id': order['id'],
+            'amount': amount,
+            'currency': 'INR',
+            'key_id': RAZORPAY_KEY_ID,
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[RAZORPAY] Create order error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/verify-payment', methods=['POST'])
+def verify_payment():
+    """Verify Razorpay payment signature."""
+    try:
+        body = request.get_json(force=True)
+        razorpay_order_id = body.get('razorpay_order_id', '')
+        razorpay_payment_id = body.get('razorpay_payment_id', '')
+        razorpay_signature = body.get('razorpay_signature', '')
+
+        if not RAZORPAY_KEY_SECRET:
+            return jsonify({'status': 'error', 'message': 'Razorpay not configured'}), 500
+
+        # Verify signature
+        message = f"{razorpay_order_id}|{razorpay_payment_id}"
+        expected_signature = hmac.new(
+            RAZORPAY_KEY_SECRET.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+        if expected_signature != razorpay_signature:
+            return jsonify({'status': 'error', 'message': 'Invalid payment signature'}), 400
+
+        return jsonify({
+            'status': 'success',
+            'payment_id': razorpay_payment_id,
+            'verified': True,
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[RAZORPAY] Verify error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════
+# ASYNC AGENT PIPELINE WITH SSE PROGRESS
+# ════════════════════════════════════════════════════════════════════
+
+# In-memory job store (works for single-worker Railway deployment)
+agent_jobs = {}
+
+
+def emit_progress(job_id, step, message, status='active', data=None):
+    """Update job progress store."""
+    if job_id not in agent_jobs:
+        agent_jobs[job_id] = {'steps': [], 'status': 'running', 'result': None}
+    agent_jobs[job_id]['steps'].append({
+        'step': step,
+        'message': message,
+        'status': status,
+        'data': data,
+        'timestamp': datetime.now().isoformat(),
+    })
+    logger.info(f"[JOB {job_id}] Step {step}: {message}")
+
+
+def run_agent_pipeline(job_id, form_data):
+    """Run the full agent pipeline in a background thread with progress updates."""
+    try:
+        agent_jobs[job_id] = {'steps': [], 'status': 'running', 'result': None}
+
+        emit_progress(job_id, 1, f"Receiving form data: {form_data['brand_name']} — {form_data['brand_category']}, {form_data['target_market']}", 'done')
+
+        # Step 2: Scrape all platforms
+        emit_progress(job_id, 2, f"Starting multi-platform scrape for @{form_data.get('instagram_handle', '').lstrip('@')}", 'active')
+
+        scraped_data = {}
+        tasks = {}
+
+        with ThreadPoolExecutor(max_workers=7) as executor:
+            if form_data.get('instagram_handle'):
+                tasks['brand_instagram'] = executor.submit(scrape_instagram, form_data['instagram_handle'], 30)
+                emit_progress(job_id, 3, f"Scraping brand profile: @{form_data['instagram_handle'].lstrip('@')}", 'active')
+
+            if form_data.get('website_url'):
+                tasks['brand_website'] = executor.submit(scrape_website, form_data['website_url'])
+
+            for i, comp_handle in enumerate(form_data.get('competitor_handles', []), 1):
+                if comp_handle and comp_handle.strip():
+                    tasks[f'competitor_{i}_instagram'] = executor.submit(scrape_instagram, comp_handle, 20)
+                    emit_progress(job_id, 3 + i, f"Scraping competitor: @{comp_handle.strip().lstrip('@')}", 'active')
+
+            if form_data.get('brand_category'):
+                tasks['category_data'] = executor.submit(
+                    scrape_category_top_accounts, form_data['brand_category'], 25
+                )
+                emit_progress(job_id, 7, f"Scraping category hashtags for {form_data['brand_category']}", 'active')
+
+            if form_data.get('youtube_channel'):
+                tasks['brand_youtube'] = executor.submit(scrape_youtube, form_data['youtube_channel'])
+            if form_data.get('linkedin_url'):
+                tasks['brand_linkedin'] = executor.submit(scrape_linkedin, form_data['linkedin_url'])
+
+            for key, future in tasks.items():
+                try:
+                    result = future.result(timeout=240)
+                    if result is not None:
+                        scraped_data[key] = result
+                        # Emit progress for completed scrapes
+                        if key == 'brand_instagram' and isinstance(result, dict) and not result.get('error'):
+                            emit_progress(job_id, 8, f"Brand profile scraped: {result.get('followers', 0):,} followers, {result.get('post_count', 0)} posts, {result.get('avg_er_pct', 0)}% ER", 'done',
+                                          {'type': 'brand_data', 'followers': result.get('followers', 0), 'posts': result.get('post_count', 0), 'er': result.get('avg_er_pct', 0), 'handle': result.get('handle', '')})
+                        elif key.startswith('competitor_') and isinstance(result, dict) and not result.get('error'):
+                            emit_progress(job_id, 9, f"Competitor scraped: @{result.get('handle', '')} — {result.get('followers', 0):,} followers, {result.get('avg_er_pct', 0)}% ER", 'done',
+                                          {'type': 'competitor_data', 'handle': result.get('handle', ''), 'followers': result.get('followers', 0), 'er': result.get('avg_er_pct', 0)})
+                        elif key == 'category_data' and isinstance(result, dict) and not result.get('error'):
+                            n_accounts = len(result.get('top_accounts', []))
+                            emit_progress(job_id, 10, f"Category scraped: {n_accounts} accounts found from hashtag data", 'done',
+                                          {'type': 'category_data', 'accounts_found': n_accounts, 'benchmarks': result.get('category_benchmarks', {})})
+                        elif key == 'brand_website' and isinstance(result, dict) and not result.get('error'):
+                            emit_progress(job_id, 11, f"Website audited: {form_data.get('website_url', '')}", 'done')
+                        else:
+                            emit_progress(job_id, 11, f"Scraped: {key}", 'done')
+                except Exception as e:
+                    scraped_data[key] = {'error': str(e)}
+                    emit_progress(job_id, 11, f"Failed: {key} — {str(e)}", 'done')
+
+        # Phase 2: Auto-scrape category leaders
+        cat_data = scraped_data.get('category_data')
+        if isinstance(cat_data, dict) and not cat_data.get('error'):
+            top_accounts = cat_data.get('top_accounts', [])
+            already_scraped = set()
+            brand_handle = (form_data.get('instagram_handle') or '').lstrip('@').strip().lower()
+            if brand_handle:
+                already_scraped.add(brand_handle)
+            for ch in form_data.get('competitor_handles', []):
+                if ch and ch.strip():
+                    already_scraped.add(ch.strip().lstrip('@').lower())
+
+            leaders_to_scrape = []
+            for acc in top_accounts:
+                handle = (acc.get('handle') or '').lower()
+                if handle and handle not in already_scraped and acc.get('followers', 0) >= 1000:
+                    leaders_to_scrape.append(handle)
+                if len(leaders_to_scrape) >= 3:
+                    break
+
+            if leaders_to_scrape:
+                emit_progress(job_id, 12, f"Auto-scraping top {len(leaders_to_scrape)} category leaders: {', '.join(['@' + h for h in leaders_to_scrape])}", 'active')
+                with ThreadPoolExecutor(max_workers=3) as executor2:
+                    leader_tasks = {}
+                    for i, lh in enumerate(leaders_to_scrape, 1):
+                        leader_tasks[f'category_leader_{i}_instagram'] = executor2.submit(scrape_instagram, lh, 20)
+                    for key, future in leader_tasks.items():
+                        try:
+                            result = future.result(timeout=120)
+                            if result is not None and not result.get('error'):
+                                scraped_data[key] = result
+                                emit_progress(job_id, 13, f"Category leader scraped: @{result.get('handle', '')} — {result.get('followers', 0):,} followers", 'done')
+                        except Exception as e:
+                            logger.warning(f"[SCRAPE] Category leader {key} failed: {e}")
+
+        emit_progress(job_id, 14, "All scraping complete. Starting AI analysis...", 'done')
+
+        # Step 3: Claude analysis
+        emit_progress(job_id, 15, "Sending scraped data to Claude Opus for 11-section deep analysis...", 'active')
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+        scraped_json = json.dumps(scraped_data, indent=2, default=str)
+        if len(scraped_json) > 100000:
+            scraped_json = scraped_json[:100000] + "\n... [trimmed for length]"
+
+        target_mkt = (form_data.get('target_market') or '').lower()
+        tiktok_note = "TikTok is BANNED in India. Do NOT recommend TikTok in platform expansion." if target_mkt in ('india',) else "TikTok is available in this market. Include it in platform expansion if relevant."
+
+        system_prompt = f"""You are a senior brand intelligence strategist at OffGrid Creatives AI.
+You write brutally honest, data-backed brand audit reports that justify a Rs.6,999 / $179 price tag.
+You think like a founder-advisor, not a generic marketing AI. Your advice must motivate the brand owner to take action.
+
+ABSOLUTE RULES — BREAK ANY AND THE REPORT IS WORTHLESS:
+
+1. DATA-FIRST: EVERY paragraph must cite specific numbers from the scraped data.
+2. BAN GENERIC: NEVER write these phrases: "post consistently", "engage with your audience", "leverage trends", "increase engagement", "create quality content", "build a community".
+3. CATEGORY-FIRST COMPARISON: This is a CATEGORY intelligence report. Primary comparison is brand vs entire category.
+4. NO FABRICATION: Only use numbers from the scraped data. If data is missing, say: "[Data point] not available."
+5. MOTIVATE THE OWNER: End sections with what winning looks like.
+6. USE ALL DATA SOURCES: Weave category_data, category leaders, and competitors into analysis.
+7. SPECIFICITY: Describe exact hooks, formats, and topics in recommendations.
+8. EACH SECTION: 200-400 words.
+
+{tiktok_note}
+
+FORMAT: Use **text** for bold, - for bullets, ## for sub-headers, line breaks between paragraphs.
+
+Return a JSON object with exactly 11 sections. Each section has:
+- "title" (string), "content" (string), "verdict" (string), "verdict_type" (string: "critical"/"warning"/"positive"/"info")
+
+JSON SCHEMA:
+{{
+  "category_landscape": {{"title": "Where You Stand Right Now", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "competitor_success_blueprint": {{"title": "Who Is Winning In Your Space & Why", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "brand_positioning": {{"title": "Your Brand vs The Market Reality", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "hook_format_intelligence": {{"title": "What Stops The Scroll (And What Doesnt)", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "audience_intelligence": {{"title": "Who Is Actually Watching & What They Want", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "organic_to_paid_bridge": {{"title": "Content Ready To Become Paid Ads", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "content_execution_plan": {{"title": "Your Exact 30-Day Content Playbook", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "what_to_stop": {{"title": "Stop These Immediately", "content": "...", "verdict": "...", "verdict_type": "critical"}},
+  "priority_action_plan": {{"title": "5 Priority Actions Ranked By Impact", "content": "...", "verdict": "...", "verdict_type": "..."}},
+  "emerging_signals": {{"title": "Trends & Opportunities Before They Peak", "content": "...", "verdict": "...", "verdict_type": "info"}},
+  "platform_expansion": {{"title": "New Channels You Should Be On", "content": "...", "verdict": "...", "verdict_type": "info"}}
+}}
+
+Return ONLY valid JSON. No markdown fences. No preamble. Start with {{ end with }}."""
+
+        user_prompt = f"""BRAND: {form_data['brand_name']}
+CATEGORY: {form_data['brand_category']}
+DESCRIPTION: {form_data['brand_description']}
+TARGET MARKET: {form_data['target_market']}
+REPORT TYPE: {form_data['report_type']}
+
+=== REAL SCRAPED DATA ===
+{scraped_json}
+=== END ===
+
+INSTRUCTIONS: Category-first comparison. Reference 5+ accounts by @handle. Minimum 200 words per section."""
+
+        claude_response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=16000,
+            messages=[{"role": "user", "content": user_prompt}],
+            system=system_prompt,
+        )
+
+        response_text = claude_response.content[0].text
+        emit_progress(job_id, 16, f"Claude analysis complete: {len(response_text):,} characters of intelligence", 'done')
+
+        # Parse response
+        response_text = escape_literal_newlines_in_strings(response_text)
+        response_text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', response_text)
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group()
+        report_data = json.loads(response_text)
+
+        emit_progress(job_id, 17, f"Parsed {len(report_data)} report sections. Generating PDF...", 'active')
+
+        # Step 4: Generate PDF
+        pdf_base64 = build_agent_pdf(report_data, form_data, scraped_data)
+        emit_progress(job_id, 18, "Branded PDF generated successfully!", 'done')
+
+        # Step 5: Send via email (Gmail via Make.com webhook or direct)
+        emit_progress(job_id, 19, f"Report ready! Delivering to {form_data.get('email', 'client')}", 'done')
+
+        agent_jobs[job_id]['status'] = 'completed'
+        agent_jobs[job_id]['result'] = {
+            'pdf_base64': pdf_base64,
+            'brand': form_data['brand_name'],
+            'sections': len(report_data),
+            'platforms_scraped': list(scraped_data.keys()),
+        }
+
+    except Exception as e:
+        logger.error(f"[JOB {job_id}] Pipeline error: {traceback.format_exc()}")
+        emit_progress(job_id, 99, f"Error: {str(e)}", 'error')
+        agent_jobs[job_id]['status'] = 'failed'
+        agent_jobs[job_id]['result'] = {'error': str(e)}
+
+
+@app.route('/agent-report-async', methods=['POST'])
+def agent_report_async():
+    """Start the agent pipeline asynchronously. Returns a job_id for SSE tracking."""
+    try:
+        body = request.get_json(force=True)
+        job_id = uuid.uuid4().hex[:16]
+
+        form_data = {
+            'brand_name': body.get('brandName', body.get('brand_name', '')),
+            'brand_category': body.get('category', body.get('brand_category', '')),
+            'brand_description': body.get('brandDescription', body.get('brand_description', '')),
+            'target_market': body.get('targetMarket', body.get('target_market', '')),
+            'report_type': body.get('reportType', body.get('report_type', 'Brand Audit + Competitor Research')),
+            'instagram_handle': body.get('instagramHandle', body.get('instagram_handle', '')),
+            'youtube_channel': body.get('youtubeChannel', body.get('youtube_channel', '')),
+            'linkedin_url': body.get('linkedinUrl', body.get('linkedin_url', '')),
+            'tiktok_handle': body.get('tiktokHandle', body.get('tiktok_handle', '')),
+            'website_url': body.get('websiteUrl', body.get('website_url', '')),
+            'competitor_handles': [
+                body.get('competitor1', body.get('competitor_1', '')),
+                body.get('competitor2', body.get('competitor_2', '')),
+                body.get('competitor3', body.get('competitor_3', '')),
+            ],
+            'full_name': body.get('fullName', body.get('full_name', '')),
+            'email': body.get('email', ''),
+            'whatsapp': body.get('whatsapp', ''),
+            'payment_id': body.get('payment_id', ''),
+        }
+
+        # Clean empty competitor handles
+        form_data['competitor_handles'] = [h for h in form_data['competitor_handles'] if h and h.strip()]
+
+        logger.info(f"[AGENT-ASYNC] Starting job {job_id} for brand: {form_data['brand_name']}")
+        agent_jobs[job_id] = {'steps': [], 'status': 'starting', 'result': None}
+
+        # Run pipeline in background thread
+        thread = threading.Thread(target=run_agent_pipeline, args=(job_id, form_data), daemon=True)
+        thread.start()
+
+        return jsonify({
+            'status': 'success',
+            'job_id': job_id,
+            'message': f'Agent pipeline started for {form_data["brand_name"]}',
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[AGENT-ASYNC] Error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/agent-status/<job_id>', methods=['GET'])
+def agent_status_sse(job_id):
+    """SSE endpoint to stream real-time agent progress."""
+    def generate():
+        last_index = 0
+        while True:
+            job = agent_jobs.get(job_id)
+            if not job:
+                yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
+                break
+
+            # Send any new steps
+            steps = job.get('steps', [])
+            while last_index < len(steps):
+                step = steps[last_index]
+                yield f"data: {json.dumps(step)}\n\n"
+                last_index += 1
+
+            # Check if job is done
+            if job['status'] in ('completed', 'failed'):
+                yield f"data: {json.dumps({'type': 'complete', 'status': job['status'], 'result': job.get('result', {})})}\n\n"
+                break
+
+            time.sleep(1)
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+            'Access-Control-Allow-Origin': '*',
+        }
+    )
+
+
+@app.route('/agent-result/<job_id>', methods=['GET'])
+def agent_result(job_id):
+    """Get the final result of a completed agent job (including PDF)."""
+    job = agent_jobs.get(job_id)
+    if not job:
+        return jsonify({'status': 'error', 'message': 'Job not found'}), 404
+    if job['status'] == 'running':
+        return jsonify({'status': 'running', 'steps_completed': len(job.get('steps', []))}), 202
+    if job['status'] == 'failed':
+        return jsonify({'status': 'failed', 'error': job.get('result', {}).get('error', 'Unknown error')}), 500
+
+    return jsonify({
+        'status': 'completed',
+        'result': job.get('result', {}),
+    }), 200
 
 
 if __name__ == '__main__':

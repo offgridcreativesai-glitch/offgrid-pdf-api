@@ -1,4 +1,8 @@
 flask
+flask-cors
 reportlab
 gunicorn
 python-dotenv
+requests
+anthropic
+razorpay
