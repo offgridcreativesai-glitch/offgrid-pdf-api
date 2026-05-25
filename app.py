@@ -92,6 +92,10 @@ S = {
 
 def cl(t):
     if not isinstance(t, str): t = str(t)
+    # Replace characters that ReportLab Helvetica can't render
+    t = t.replace('₹', 'Rs.').replace('₹', 'Rs.')
+    # Replace other common problem Unicode chars
+    t = t.replace('■', '').replace('●', '-').replace('•', '-')
     return t.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
 
 def sec_header(num, title):
@@ -1964,11 +1968,16 @@ def scrape_category_top_accounts(brand_category, max_accounts=25):
 
     import anthropic as _anthropic
     prompt = (
-        "Generate 5 highly specific Instagram hashtags for the brand category below. "
-        "These should be hashtags that active creators/brands in this EXACT niche use regularly. "
+        "Generate 8 Instagram hashtags for the brand category below. "
+        "Mix of: 3 broad category hashtags (high volume, 100K+ posts), "
+        "3 niche-specific hashtags (medium volume, used by real brands in this space), "
+        "2 India-specific hashtags if the category is common in India. "
+        "These should be hashtags that ACTIVE Instagram creators and brands in this niche use on their posts. "
+        "Think about what hashtags a buyer or reseller would search for. "
         "Rules: lowercase, alphanumeric only, no spaces, no hyphens, no special characters, no hash symbol. "
-        "Return ONLY a raw JSON array. No markdown, no code fences.\n\n"
-        f"Brand category: {brand_category}"
+        "Return ONLY a raw JSON array of strings. No markdown, no code fences, no explanation.\n\n"
+        f"Brand category: {brand_category}\n"
+        f"Example for 'Women ethnic wear': [\"ethnicwear\", \"indianfashion\", \"sareecollection\", \"kurtionline\", \"wholesalekurti\", \"designersaree\", \"suratsaree\", \"womensfashion\"]"
     )
     try:
         _client = _anthropic.Anthropic(api_key=api_key)
@@ -1980,7 +1989,7 @@ def scrape_category_top_accounts(brand_category, max_accounts=25):
         text = _resp.content[0].text.strip().replace('```json', '').replace('```', '').strip()
         hashtags = json.loads(text)
         clean = [re.sub(r'[^a-z0-9]', '', h.lower()) for h in hashtags if isinstance(h, str)]
-        clean = [h for h in clean if h][:5]
+        clean = [h for h in clean if h and len(h) >= 4][:8]
     except Exception as e:
         logger.error(f"[CATEGORY] Hashtag generation failed: {e}")
         return {'error': f'Hashtag generation failed: {e}'}
@@ -1990,9 +1999,9 @@ def scrape_category_top_accounts(brand_category, max_accounts=25):
     # Scrape posts from category hashtags
     hashtag_data = apify_run_actor('apify/instagram-hashtag-scraper', {
         'hashtags': clean,
-        'resultsLimit': 100,
+        'resultsLimit': 200,
         'resultsType': 'posts'
-    }, timeout_secs=180)
+    }, timeout_secs=240)
 
     if not isinstance(hashtag_data, list) or len(hashtag_data) == 0:
         return {'error': 'No hashtag data returned', 'hashtags': clean}
@@ -2031,12 +2040,12 @@ def scrape_category_top_accounts(brand_category, max_accounts=25):
         if (post.get('followersCount') or 0) > acc['followers']:
             acc['followers'] = post['followersCount']
 
-    # Filter bots: min 500 followers or min 3 posts in data
+    # Filter: min 2 posts in data. Follower count often missing from hashtag scraper
     filtered = {}
     for username, acc in accounts.items():
         post_count = len(acc['posts'])
         followers = acc['followers']
-        if followers >= 1000 and post_count >= 3:
+        if post_count >= 2:
             avg_likes = acc['total_likes'] / max(post_count, 1)
             avg_comments = acc['total_comments'] / max(post_count, 1)
             er = ((avg_likes + avg_comments) / max(followers, 1)) * 100 if followers > 0 else 0
@@ -2111,9 +2120,9 @@ def scrape_all_platforms(form_data):
     tasks = {}
 
     with ThreadPoolExecutor(max_workers=7) as executor:
-        # Brand's own profiles (30 posts for brand)
+        # Brand's own profiles (200 posts for deep dive)
         if form_data.get('instagram_handle'):
-            tasks['brand_instagram'] = executor.submit(scrape_instagram, form_data['instagram_handle'], 30)
+            tasks['brand_instagram'] = executor.submit(scrape_instagram, form_data['instagram_handle'], 200)
         if form_data.get('youtube_channel'):
             tasks['brand_youtube'] = executor.submit(scrape_youtube, form_data['youtube_channel'])
         if form_data.get('linkedin_url'):
@@ -2320,26 +2329,23 @@ def build_agent_pdf(report_data, form_data, scraped_data):
     # ════════════════════════════════════════════════════════════════════
     cover_rows = [
         [Paragraph("SOCIAL MEDIA BRAND INTELLIGENCE REPORT", ParagraphStyle('CT', fontName='Helvetica-Bold', fontSize=10, textColor=ACCENT, alignment=TA_CENTER))],
-        [Spacer(1, 16*mm)],
+        [Spacer(1, 20*mm)],
         [Paragraph(cl(brand_name.upper()), S['cover_brand'])],
-        [Spacer(1, 3*mm)],
-        [Paragraph(cl(brand_category), S['cover_sub'])],
-        [Spacer(1, 2*mm)],
-        [Paragraph(f"Market: {target_market}  |  {today}  |  Version 4.0", S['cover_label'])],
-        [Spacer(1, 5*mm)],
-        [Paragraph(f"Based on {total_posts + cat_posts} posts from {len(competitors_scraped) + cat_accounts} accounts",
-            ParagraphStyle('DS', fontName='Helvetica', fontSize=8, textColor=GREEN_OK, alignment=TA_CENTER))],
         [Spacer(1, 4*mm)],
+        [Paragraph(cl(brand_category), S['cover_sub'])],
+        [Spacer(1, 3*mm)],
+        [Paragraph(f"Market: {target_market}  |  {today}  |  Version 5.0", S['cover_label'])],
+        [Spacer(1, 8*mm)],
         [HRFlowable(width=60*mm, thickness=0.5, color=ACCENT)],
-        [Spacer(1, 5*mm)],
-        [Paragraph("Multi-Platform Intelligence Report with Category Benchmarks",
+        [Spacer(1, 8*mm)],
+        [Paragraph("Prepared exclusively for your brand by OffGrid Creatives AI",
             ParagraphStyle('CV', fontName='Helvetica', fontSize=9, textColor=colors.HexColor("#CCCCCC"), alignment=TA_CENTER))],
-        [Spacer(1, 12*mm)],
+        [Spacer(1, 16*mm)],
         [Paragraph("OffGrid Creatives AI", S['cover_og'])],
         [Paragraph("offgridcreativesai@gmail.com", S['cover_label'])],
-        [Spacer(1, 6*mm)],
+        [Spacer(1, 8*mm)],
         [Paragraph(LEGAL, ParagraphStyle('DL', fontName='Helvetica', fontSize=6.5,
-            textColor=colors.HexColor("#888888"), alignment=TA_CENTER, leading=9))],
+            textColor=colors.HexColor("#666666"), alignment=TA_CENTER, leading=9))],
     ]
     ct = Table(cover_rows, colWidths=[W])
     ct.setStyle(TableStyle([
@@ -2353,96 +2359,190 @@ def build_agent_pdf(report_data, form_data, scraped_data):
     story += [Spacer(1, 25*mm), ct, PageBreak()]
 
     # ════════════════════════════════════════════════════════════════════
+    # TABLE OF CONTENTS
+    # ════════════════════════════════════════════════════════════════════
+    TOC_STYLE = ParagraphStyle('TOC', fontName='Helvetica', fontSize=10, textColor=DARK_GRAY, leading=20, spaceAfter=2)
+    TOC_NUM = ParagraphStyle('TOCN', fontName='Helvetica-Bold', fontSize=10, textColor=ACCENT, leading=20)
+    story += [Paragraph("CONTENTS", ParagraphStyle('TOCH', fontName='Helvetica-Bold', fontSize=16,
+        textColor=BLACK, spaceAfter=6)),
+        HRFlowable(width="100%", thickness=2, color=ACCENT), Spacer(1, 6*mm)]
+
+    toc_sections = [
+        ("Executive Scorecard", "Your brand at a glance"),
+        ("Competitor Comparison", "Side-by-side with your competition"),
+        ("Where You Stand Right Now", "Category landscape and positioning"),
+        ("Who Is Winning In Your Space and Why", "Competitor deep-dive"),
+        ("Your Brand vs The Market Reality", "Honest positioning assessment"),
+        ("What Stops The Scroll", "Hook and format intelligence"),
+        ("Who Is Actually Watching", "Audience intelligence"),
+        ("Content Ready To Become Paid Ads", "Organic-to-paid bridge"),
+        ("Your 30-Day Content Playbook", "Execution plan"),
+        ("Stop These Immediately", "What to kill"),
+        ("5 Priority Actions Ranked By Impact", "Your action plan"),
+        ("Trends and Opportunities", "Before they peak"),
+        ("New Channels You Should Be On", "Platform expansion"),
+    ]
+    for idx, (title, subtitle) in enumerate(toc_sections, 1):
+        num_str = f"{idx:02d}" if idx > 2 else ""
+        prefix = "" if idx <= 2 else f"Section {idx-2}: "
+        toc_row = Table([
+            [Paragraph(f"<b>{idx:02d}</b>", TOC_NUM),
+             Paragraph(f"<b>{cl(title)}</b>  <font size='8' color='#888888'>— {cl(subtitle)}</font>", TOC_STYLE)]
+        ], colWidths=[12*mm, W - 12*mm])
+        toc_row.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ('TOPPADDING', (0,0), (-1,-1), 2),
+        ]))
+        story.append(toc_row)
+
+    story += [Spacer(1, 10*mm),
+        Paragraph("This report is built entirely from real Instagram data scraped live on the date above.",
+            ParagraphStyle('TOCF', fontName='Helvetica', fontSize=8, textColor=MID_GRAY, alignment=TA_CENTER)),
+        PageBreak()]
+
+    # ════════════════════════════════════════════════════════════════════
     # EXECUTIVE SCORECARD PAGE
     # ════════════════════════════════════════════════════════════════════
-    story += [Paragraph("EXECUTIVE SCORECARD", ParagraphStyle('ES', fontName='Helvetica-Bold', fontSize=14,
+    story += [Paragraph("EXECUTIVE SCORECARD", ParagraphStyle('ES', fontName='Helvetica-Bold', fontSize=16,
         textColor=BLACK, spaceAfter=4)),
         HRFlowable(width="100%", thickness=2, color=ACCENT), Spacer(1, 6*mm)]
 
     if brand_ig and not brand_ig.get('error'):
-        brand_er = brand_ig.get('avg_er_pct', 0)
+        brand_er = round(brand_ig.get('avg_er_pct', 0), 1)
         brand_er_color = score_color(brand_er, cat_avg_er) if cat_avg_er else ACCENT
 
-        # Top metric cards row
+        # Top metric cards row — NO "posts analyzed", show business metrics only
+        freq = brand_ig.get('posting_frequency_per_week')
+        freq_text = f"{freq}/week" if freq else "N/A"
         card_row = Table([[
             metric_card(f"{brand_ig.get('followers', 0):,}", "FOLLOWERS", "Your Instagram", LIGHT_GRAY, ACCENT),
             metric_card(f"{brand_er}%", "ENGAGEMENT RATE",
-                f"Category avg: {cat_avg_er}%" if cat_avg_er else "", LIGHT_GRAY, brand_er_color),
-            metric_card(f"{brand_ig.get('recent_posts_count', 0)}", "POSTS ANALYZED", "Live scraped data", LIGHT_GRAY, ACCENT),
+                f"Category avg: {round(cat_avg_er, 1)}%" if cat_avg_er else "Calculating...", LIGHT_GRAY, brand_er_color),
+            metric_card(freq_text, "POSTING FREQUENCY", "Posts per week", LIGHT_GRAY, ACCENT),
         ]], colWidths=[W/3, W/3, W/3])
         card_row.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
         story += [card_row, Spacer(1, 5*mm)]
 
-        # Posting frequency + format
-        freq = brand_ig.get('posting_frequency_per_week')
-        freq_text = f"{freq} posts/week" if freq else "N/A"
+        # Format breakdown + key stats
         fmt = brand_ig.get('format_breakdown', {})
-        fmt_str = " | ".join([f"{k}: {v}" for k, v in fmt.items()]) if fmt else "N/A"
+        total_fmt_posts = sum(fmt.values()) if fmt else 0
+        fmt_parts = []
+        for k, v in sorted(fmt.items(), key=lambda x: x[1], reverse=True):
+            pct = round(v / max(total_fmt_posts, 1) * 100)
+            fmt_parts.append(f"{k}: {v} ({pct}%)")
+        fmt_str = "  |  ".join(fmt_parts) if fmt_parts else "N/A"
         avg_views = brand_ig.get('avg_video_views', 0)
         views_text = f"{avg_views:,} avg views/reel" if avg_views else "No Reels data"
         story += [kv_table([
-            ("POSTING FREQUENCY", freq_text),
-            ("FORMAT BREAKDOWN", fmt_str),
+            ("FORMAT MIX", fmt_str),
             ("REELS PERFORMANCE", views_text),
-            ("AVG CAPTION LENGTH", f"{brand_ig.get('avg_caption_length', 0)} chars"),
+            ("TOTAL POSTS ON PROFILE", str(brand_ig.get('total_posts', brand_ig.get('recent_posts_count', 'N/A')))),
             ("BIO", brand_ig.get('bio', 'N/A')[:150]),
         ]), Spacer(1, 5*mm)]
 
-    # ── CATEGORY LEADERBOARD: Rank the brand against the entire niche ──
-    # Collect ALL accounts: brand + user-submitted competitors + category leaders + category top accounts
-    leaderboard = []
+    # ════════════════════════════════════════════════════════════════════
+    # COMPETITOR COMPARISON TABLE (side-by-side)
+    # ════════════════════════════════════════════════════════════════════
+    story += [Paragraph("COMPETITOR COMPARISON", ParagraphStyle('CCH', fontName='Helvetica-Bold', fontSize=14,
+        textColor=BLACK, spaceAfter=4)),
+        HRFlowable(width="100%", thickness=1.5, color=ACCENT), Spacer(1, 4*mm)]
 
-    # Add brand
+    # Build comparison data
+    comp_accounts = []
+    if brand_ig and not brand_ig.get('error'):
+        comp_accounts.append(('YOUR BRAND', brand_ig))
+    for key in sorted(scraped_data.keys()):
+        is_comp = key.startswith('competitor_') and key.endswith('_instagram')
+        is_leader = key.startswith('category_leader_') and key.endswith('_instagram')
+        if (is_comp or is_leader) and isinstance(scraped_data[key], dict) and not scraped_data[key].get('error'):
+            cd = scraped_data[key]
+            label = f"@{cd.get('handle', '?')}"
+            comp_accounts.append((label, cd))
+
+    if len(comp_accounts) >= 2:
+        comp_headers = ["METRIC"] + [cl(name) for name, _ in comp_accounts]
+        comp_rows = []
+        metrics = [
+            ("Followers", lambda d: f"{d.get('followers', 0):,}"),
+            ("Engagement Rate", lambda d: f"{round(d.get('avg_er_pct', 0), 1)}%"),
+            ("Avg Likes/Post", lambda d: f"{round(d.get('avg_likes', 0)):,}"),
+            ("Avg Comments/Post", lambda d: f"{round(d.get('avg_comments', 0)):,}"),
+            ("Avg Reel Views", lambda d: f"{d.get('avg_video_views', 0):,}" if d.get('avg_video_views') else "N/A"),
+            ("Posting Frequency", lambda d: f"{d.get('posting_frequency_per_week', 'N/A')}/week"),
+            ("Top Format", lambda d: max(d.get('format_breakdown', {'N/A': 1}), key=d.get('format_breakdown', {'N/A': 1}).get)),
+            ("Dominant Hook Type", lambda d: max(d.get('hook_analysis', {'N/A': 1}), key=d.get('hook_analysis', {'N/A': 1}).get) if d.get('hook_analysis') else "N/A"),
+        ]
+        for metric_name, extractor in metrics:
+            row = [metric_name]
+            for _, data in comp_accounts:
+                try:
+                    row.append(extractor(data))
+                except Exception:
+                    row.append("N/A")
+            comp_rows.append(row)
+
+        # Calculate column widths based on number of accounts
+        n_cols = len(comp_headers)
+        first_col = 35*mm
+        other_col = (W - first_col) / (n_cols - 1)
+        col_widths = [first_col] + [other_col] * (n_cols - 1)
+
+        comp_tbl = Table(
+            [[Paragraph(f"<b>{cl(h)}</b>", ParagraphStyle('CTH', fontName='Helvetica-Bold', fontSize=7.5, textColor=WHITE)) for h in comp_headers]] +
+            [[Paragraph(cl(str(c)), ParagraphStyle('CTD', fontName='Helvetica', fontSize=8, textColor=DARK_GRAY, leading=12)) for c in row] for row in comp_rows],
+            colWidths=col_widths
+        )
+        style_cmds = [
+            ('BACKGROUND', (0,0), (-1,0), BLACK),
+            ('BACKGROUND', (0,1), (-1,-1), LIGHT_GRAY),
+            ('BACKGROUND', (1,1), (1,-1), colors.HexColor("#FFF8EC")),  # Highlight brand column
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
+            ('INNERGRID', (0,0), (-1,-1), 0.3, BORDER),
+            ('BOX', (0,0), (-1,-1), 0.5, BORDER),
+            ('FONTNAME', (0,1), (0,-1), 'Helvetica-Bold'),
+        ]
+        comp_tbl.setStyle(TableStyle(style_cmds))
+        story += [comp_tbl, Spacer(1, 5*mm)]
+
+    # ── CATEGORY LEADERBOARD ──
+    leaderboard = []
     if brand_ig and not brand_ig.get('error'):
         leaderboard.append({
-            'handle': brand_ig.get('handle', '?'),
-            'followers': brand_ig.get('followers', 0),
-            'avg_likes': brand_ig.get('avg_likes', 0),
-            'avg_er_pct': brand_ig.get('avg_er_pct', 0),
-            'fmt': brand_ig.get('format_breakdown', {}),
-            'label': 'YOU',
-            'source': 'brand',
+            'handle': brand_ig.get('handle', '?'), 'followers': brand_ig.get('followers', 0),
+            'avg_likes': brand_ig.get('avg_likes', 0), 'avg_er_pct': brand_ig.get('avg_er_pct', 0),
+            'fmt': brand_ig.get('format_breakdown', {}), 'label': 'YOU', 'source': 'brand',
         })
-
-    # Add user-submitted competitors + auto-discovered category leaders (full profile data)
     for key in sorted(scraped_data.keys()):
         is_comp = key.startswith('competitor_') and key.endswith('_instagram')
         is_leader = key.startswith('category_leader_') and key.endswith('_instagram')
         if (is_comp or is_leader) and isinstance(scraped_data[key], dict) and not scraped_data[key].get('error'):
             cd = scraped_data[key]
             if cd.get('followers', 0) == 0 and cd.get('avg_likes', 0) == 0:
-                continue  # Skip empty profiles
+                continue
             leaderboard.append({
-                'handle': cd.get('handle', '?'),
-                'followers': cd.get('followers', 0),
-                'avg_likes': cd.get('avg_likes', 0),
-                'avg_er_pct': cd.get('avg_er_pct', 0),
+                'handle': cd.get('handle', '?'), 'followers': cd.get('followers', 0),
+                'avg_likes': cd.get('avg_likes', 0), 'avg_er_pct': cd.get('avg_er_pct', 0),
                 'fmt': cd.get('format_breakdown', {}),
-                'label': 'LEADER' if is_leader else 'COMP',
-                'source': 'leader' if is_leader else 'competitor',
+                'label': 'LEADER' if is_leader else 'COMP', 'source': 'leader' if is_leader else 'competitor',
             })
-
-    # Add remaining category top accounts (from hashtag data — lighter stats but broadens the picture)
     cat_data = scraped_data.get('category_data')
     already_in = {a['handle'].lower() for a in leaderboard}
     if isinstance(cat_data, dict) and not cat_data.get('error'):
         for acc in cat_data.get('top_accounts', []):
             handle = (acc.get('handle') or '').lower()
-            if handle and handle not in already_in and acc.get('followers', 0) >= 500:
-                # Get dominant format from breakdown
-                fmt = acc.get('format_breakdown', {})
+            if handle and handle not in already_in:
                 leaderboard.append({
-                    'handle': acc.get('handle', '?'),
-                    'followers': acc.get('followers', 0),
-                    'avg_likes': acc.get('avg_likes', 0),
-                    'avg_er_pct': acc.get('avg_er_pct', 0),
-                    'fmt': fmt,
-                    'label': '',
-                    'source': 'category',
+                    'handle': acc.get('handle', '?'), 'followers': acc.get('followers', 0),
+                    'avg_likes': acc.get('avg_likes', 0), 'avg_er_pct': acc.get('avg_er_pct', 0),
+                    'fmt': acc.get('format_breakdown', {}), 'label': '', 'source': 'category',
                 })
                 already_in.add(handle)
 
-    # Sort by engagement rate (descending) and find brand's rank
     leaderboard.sort(key=lambda x: x['avg_er_pct'], reverse=True)
     brand_rank = None
     for idx, acc in enumerate(leaderboard, 1):
@@ -2450,52 +2550,28 @@ def build_agent_pdf(report_data, form_data, scraped_data):
             brand_rank = idx
             break
 
-    if leaderboard:
-        rank_text = f"Your brand ranks #{brand_rank} out of {len(leaderboard)} accounts in this category" if brand_rank else ""
-        story += [Paragraph("CATEGORY LEADERBOARD", SUBHEAD_STYLE)]
-        if rank_text:
-            story += [Paragraph(rank_text, ParagraphStyle('RankText', fontName='Helvetica-Bold', fontSize=9,
-                textColor=colors.HexColor('#CC3333') if brand_rank and brand_rank > len(leaderboard) * 0.5 else colors.HexColor('#228B22'),
-                spaceAfter=4))]
+    if len(leaderboard) > 1:
+        story += [Spacer(1, 4*mm), Paragraph("CATEGORY LEADERBOARD", SUBHEAD_STYLE)]
+        if brand_rank:
+            rank_color = colors.HexColor('#CC3333') if brand_rank > len(leaderboard) * 0.5 else colors.HexColor('#228B22')
+            story += [Paragraph(f"Your brand ranks #{brand_rank} out of {len(leaderboard)} accounts in this category",
+                ParagraphStyle('RankText', fontName='Helvetica-Bold', fontSize=9, textColor=rank_color, spaceAfter=4))]
 
         lb_rows = []
-        for idx, acc in enumerate(leaderboard, 1):
+        for idx, acc in enumerate(leaderboard[:15], 1):  # Show top 15 max
             handle_display = f"@{acc['handle']}"
-            if acc['label'] == 'YOU':
-                handle_display += " (YOU)"
-            elif acc['label'] == 'COMP':
-                handle_display += " *"
-            elif acc['label'] == 'LEADER':
-                handle_display += " ★"
-            # Dominant format
+            if acc['label'] == 'YOU': handle_display += " (YOU)"
+            elif acc['label'] == 'COMP': handle_display += " *"
+            elif acc['label'] == 'LEADER': handle_display += " +"
             fmt = acc.get('fmt', {})
-            top_fmt = max(fmt, key=fmt.get) if fmt else "—"
-            lb_rows.append([
-                str(idx),
-                handle_display,
-                f"{acc['followers']:,}",
-                f"{acc['avg_likes']}",
-                f"{acc['avg_er_pct']}%",
-                top_fmt,
-            ])
+            top_fmt = max(fmt, key=fmt.get) if fmt else "-"
+            lb_rows.append([str(idx), handle_display, f"{acc['followers']:,}",
+                f"{round(acc['avg_likes'], 1)}", f"{round(acc['avg_er_pct'], 1)}%", top_fmt])
         story += [comparison_table(lb_rows, ["#", "ACCOUNT", "FOLLOWERS", "AVG LIKES", "ENG. RATE", "TOP FORMAT"]),
                   Spacer(1, 2*mm),
-                  Paragraph("★ = Auto-discovered category leader  |  * = Your submitted competitor", ParagraphStyle(
-                      'LegendStyle', fontName='Helvetica', fontSize=6, textColor=LIGHT_GRAY)),
+                  Paragraph("+ = Auto-discovered category leader  |  * = Your submitted competitor", ParagraphStyle(
+                      'LegendStyle', fontName='Helvetica', fontSize=6.5, textColor=MID_GRAY)),
                   Spacer(1, 5*mm)]
-
-    # ── Category Benchmarks Summary ──
-    if cat_bench:
-        story += [Paragraph("CATEGORY BENCHMARKS", SUBHEAD_STYLE)]
-        cat_fmt = cat_bench.get('dominant_formats', {})
-        cat_fmt_str = " | ".join([f"{k}: {v}%" for k, v in cat_fmt.items()]) if cat_fmt else "N/A"
-        story += [kv_table([
-            ("CATEGORY AVG ENGAGEMENT", f"{cat_avg_er}%"),
-            ("MEDIAN FOLLOWERS", f"{cat_bench.get('median_followers', 0):,}"),
-            ("DOMINANT FORMATS", cat_fmt_str),
-            ("POSTS ANALYZED", str(cat_bench.get('total_posts_analyzed', 0))),
-            ("ACCOUNTS IN LEADERBOARD", str(len(leaderboard))),
-        ]), Spacer(1, 5*mm)]
 
     story.append(PageBreak())
 
@@ -2747,6 +2823,8 @@ PLATFORM EXPANSION SECTION RULES:
 - Each platform recommendation must include: WHY, WHAT content type, HOW OFTEN, EXPECTED IMPACT
 - {tiktok_note}
 
+CURRENCY: Always write "Rs." for Indian Rupees, never the ₹ symbol (it breaks PDF rendering). Write "Rs.500" not "₹500".
+
 Return ONLY valid JSON. No markdown fences. No preamble. Start with {{ end with }}."""
 
         user_prompt = f"""BRAND: {form_data['brand_name']}
@@ -2966,8 +3044,8 @@ def run_agent_pipeline(job_id, form_data):
 
         with ThreadPoolExecutor(max_workers=7) as executor:
             if form_data.get('instagram_handle'):
-                tasks['brand_instagram'] = executor.submit(scrape_instagram, form_data['instagram_handle'], 30)
-                emit_progress(job_id, 3, f"Scraping brand profile: @{form_data['instagram_handle'].lstrip('@')}", 'active')
+                tasks['brand_instagram'] = executor.submit(scrape_instagram, form_data['instagram_handle'], 200)
+                emit_progress(job_id, 3, f"Deep-scraping full brand profile: @{form_data['instagram_handle'].lstrip('@')} (up to 200 posts)", 'active')
 
             if form_data.get('website_url'):
                 tasks['brand_website'] = executor.submit(scrape_website, form_data['website_url'])
@@ -3065,21 +3143,28 @@ def run_agent_pipeline(job_id, form_data):
         system_prompt = f"""You are a senior brand intelligence strategist at OffGrid Creatives AI.
 You write brutally honest, data-backed brand audit reports that justify a Rs.6,999 / $179 price tag.
 You think like a founder-advisor, not a generic marketing AI. Your advice must motivate the brand owner to take action.
+The report is for the BRAND OWNER — a business person, not a marketer or data analyst. Write like a consultant speaking to a CEO.
 
 ABSOLUTE RULES — BREAK ANY AND THE REPORT IS WORTHLESS:
 
 1. DATA-FIRST: EVERY paragraph must cite specific numbers from the scraped data.
 2. BAN GENERIC: NEVER write these phrases: "post consistently", "engage with your audience", "leverage trends", "increase engagement", "create quality content", "build a community".
-3. CATEGORY-FIRST COMPARISON: This is a CATEGORY intelligence report. Primary comparison is brand vs entire category.
-4. NO FABRICATION: Only use numbers from the scraped data. If data is missing, say: "[Data point] not available."
-5. MOTIVATE THE OWNER: End sections with what winning looks like.
-6. USE ALL DATA SOURCES: Weave category_data, category leaders, and competitors into analysis.
-7. SPECIFICITY: Describe exact hooks, formats, and topics in recommendations.
-8. EACH SECTION: 200-400 words.
+3. CATEGORY COMPARISON IN EVERY SECTION: This brand exists in a CATEGORY. Every section must compare the brand against:
+   - The user-submitted competitors (from competitor_1_instagram, competitor_2_instagram)
+   - Category leaders discovered from hashtag data (from category_data, category_leader_* keys)
+   - Category benchmarks/averages
+   Show the brand owner WHO in their category is doing it better and HOW.
+4. NO FABRICATION: Only use numbers from the scraped data. If data is missing, say: "Data not available for this metric."
+5. MOTIVATE THE OWNER: End sections with a clear, specific picture of what winning looks like.
+6. USE ALL DATA SOURCES: Use brand_instagram, competitor data, category_data (top_accounts, category_benchmarks), category_leader data, and brand_youtube data.
+7. SPECIFICITY: Name specific @handles, specific post captions, specific hooks, specific formats.
+8. EACH SECTION: 250-450 words. No section should feel thin.
+9. NO TECHNICAL JARGON: Never say "X posts analyzed", "scraping", "data points", "engagement rate formula". Write in plain business language. Say "your best-performing post got X views" not "analysis of N posts reveals..."
+10. WRITE FOR ACTION: Every paragraph should lead to "here's what you should do about it."
 
 {tiktok_note}
 
-FORMAT: Use **text** for bold, - for bullets, ## for sub-headers, line breaks between paragraphs.
+FORMAT: Use **text** for bold, - for bullets, ## for sub-headers, line breaks between paragraphs. Keep paragraphs short (3-5 lines max).
 
 Return a JSON object with exactly 11 sections. Each section has:
 - "title" (string), "content" (string), "verdict" (string), "verdict_type" (string: "critical"/"warning"/"positive"/"info")
@@ -3099,6 +3184,8 @@ JSON SCHEMA:
   "platform_expansion": {{"title": "New Channels You Should Be On", "content": "...", "verdict": "...", "verdict_type": "info"}}
 }}
 
+CURRENCY: Always write "Rs." for Indian Rupees, never the ₹ symbol (it breaks PDF rendering). Write "Rs.500" not "₹500".
+
 Return ONLY valid JSON. No markdown fences. No preamble. Start with {{ end with }}."""
 
         user_prompt = f"""BRAND: {form_data['brand_name']}
@@ -3107,11 +3194,17 @@ DESCRIPTION: {form_data['brand_description']}
 TARGET MARKET: {form_data['target_market']}
 REPORT TYPE: {form_data['report_type']}
 
-=== REAL SCRAPED DATA ===
+=== REAL SCRAPED DATA (use ONLY this data, do not invent numbers) ===
 {scraped_json}
-=== END ===
+=== END OF DATA ===
 
-INSTRUCTIONS: Category-first comparison. Reference 5+ accounts by @handle. Minimum 200 words per section."""
+CRITICAL INSTRUCTIONS:
+- Compare brand against EVERY competitor and category leader by @handle in every section
+- If category_data has top_accounts, reference them as "accounts we discovered in your category" not "hashtag scrape results"
+- If brand_youtube data exists, incorporate YouTube metrics into Section 11 (Platform Expansion) with specific numbers
+- Reference at least 5 different @handles throughout the report
+- Minimum 250 words per section
+- Write like you're advising a friend who owns this business, not writing a technical report"""
 
         claude_response = client.messages.create(
             model="claude-opus-4-6",
