@@ -14,6 +14,7 @@ import requests as http_requests
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 load_dotenv(override=True)
+from functools import wraps
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from datetime import datetime
@@ -23,6 +24,22 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
+
+# ── API Key Authentication ──
+OFFGRID_API_KEY = os.environ.get('OFFGRID_API_KEY', '')
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not OFFGRID_API_KEY:
+            logger.warning("[AUTH] OFFGRID_API_KEY not set — endpoint unprotected")
+            return f(*args, **kwargs)
+        key = request.headers.get('X-API-Key') or request.headers.get('Authorization', '').removeprefix('Bearer ')
+        if key != OFFGRID_API_KEY:
+            logger.warning(f"[AUTH] Rejected request to {request.path} — invalid or missing API key")
+            return jsonify({'status': 'error', 'message': 'Invalid or missing API key'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # ── Pipeline imports (modular agent code) ──
 from pipeline import (
@@ -36,7 +53,7 @@ from pipeline import (
 
 # ── Legacy endpoints (Make.com-compatible Report 1 & 2) ──
 from legacy import register_legacy_routes
-register_legacy_routes(app)
+register_legacy_routes(app, require_api_key=require_api_key)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -134,6 +151,7 @@ def scrape_all_platforms(form_data):
 # ════════════════════════════════════════════════════════════════════
 
 @app.route('/agent-report', methods=['POST'])
+@require_api_key
 def agent_report():
     """Full agent pipeline (sync): scrape → analyze → PDF → return base64."""
     try:
@@ -178,6 +196,7 @@ def agent_report():
 
 
 @app.route('/agent-scrape-only', methods=['POST'])
+@require_api_key
 def agent_scrape_only():
     """Scrape all platforms and return raw data — for frontend live preview."""
     try:
@@ -287,6 +306,7 @@ def verify_payment():
 # ════════════════════════════════════════════════════════════════════
 
 @app.route('/agent-report-async', methods=['POST'])
+@require_api_key
 def agent_report_async():
     """Start the agent pipeline asynchronously. Returns a job_id for SSE tracking."""
     try:

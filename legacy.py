@@ -31,14 +31,18 @@ from pipeline.strategist import _escape_literal_newlines as escape_literal_newli
 logger = logging.getLogger(__name__)
 
 
-def register_legacy_routes(app):
+def register_legacy_routes(app, require_api_key=None):
     """Register all legacy Make.com-compatible routes on the Flask app."""
+
+    def _auth(f):
+        return require_api_key(f) if require_api_key else f
 
     # ════════════════════════════════════════════════════════════════════
     # REPORT 2 — Pre-Ads Intelligence (legacy, deactivated pipeline)
     # ════════════════════════════════════════════════════════════════════
 
     @app.route('/generate-pdf', methods=['POST'])
+    @_auth
     def generate_pdf():
         try:
             body = request.get_json(force=True)
@@ -133,6 +137,7 @@ def register_legacy_routes(app):
     # ════════════════════════════════════════════════════════════════════
 
     @app.route('/generate-report1-pdf', methods=['POST'])
+    @_auth
     def generate_report1_pdf():
         try:
             body = request.get_json(force=True)
@@ -202,6 +207,7 @@ def register_legacy_routes(app):
             return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
     @app.route('/generate-hashtags', methods=['POST'])
+    @_auth
     def generate_hashtags():
         try:
             body = request.get_json(force=True)
